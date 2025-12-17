@@ -195,3 +195,64 @@ BEGIN
     VALUES (v_track_id, i, 'יום ' || i, true);
   END LOOP;
 END $$;
+-- =============================================
+-- Security & Policies (RLS) - הוסף את זה לסוף הקובץ
+-- =============================================
+
+-- 1. אפשור RLS לטבלאות
+ALTER TABLE public.families ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.parents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.children ENABLE ROW LEVEL SECURITY;
+
+-- 2. מדיניות למשפחות (Families)
+-- הרשאה: כל משתמש מחובר יכול ליצור משפחה חדשה
+CREATE POLICY "Users can create families" 
+ON public.families 
+FOR INSERT 
+TO authenticated 
+WITH CHECK (true);
+
+-- הרשאה: משתמשים יכולים לראות את המשפחה שלהם (כרגע פתוח לקריאה למחוברים כדי למנוע חסימות בלוגין)
+CREATE POLICY "Users can view families" 
+ON public.families 
+FOR SELECT 
+TO authenticated 
+USING (true);
+
+-- 3. מדיניות להורים (Parents)
+-- הרשאה: משתמש יכול ליצור פרופיל הורה לעצמו (ה-ID חייב להתאים)
+CREATE POLICY "Users can insert their own parent profile" 
+ON public.parents 
+FOR INSERT 
+TO authenticated 
+WITH CHECK (auth.uid() = id);
+
+-- הרשאה: משתמש יכול לראות את הפרופיל של עצמו
+CREATE POLICY "Users can view their own parent profile" 
+ON public.parents 
+FOR SELECT 
+TO authenticated 
+USING (auth.uid() = id);
+
+-- 4. מדיניות לילדים (Children)
+-- הרשאה: יצירת פרופיל ילד (מכסה גם ילד עצמאי וגם הורה שמוסיף ילד)
+CREATE POLICY "Users can insert child profiles" 
+ON public.children 
+FOR INSERT 
+TO authenticated 
+WITH CHECK (true);
+
+-- הרשאה: צפייה בפרופיל ילד (כרגע פתוח למחוברים, בהמשך נדייק לפי משפחה)
+CREATE POLICY "Users can view child profiles" 
+ON public.children 
+FOR SELECT 
+TO authenticated 
+USING (true);
+
+-- מדיניות עדכון (Update) - כדי שילדים יוכלו לעדכן התקדמות
+CREATE POLICY "Children can update their own progress" 
+ON public.children 
+FOR UPDATE
+TO authenticated
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
