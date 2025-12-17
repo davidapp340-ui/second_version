@@ -12,9 +12,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Home, Plus, TrendingUp } from 'lucide-react-native';
 import { useScreenTexts } from '@/hooks/useTexts';
-import { getCurrentUser } from '@/lib/authService';
+import { useAuth } from '@/hooks/useAuth'; // שימוש ב-Hook החדש
 import {
-  getParentProfile,
   getFamily,
   getChildren,
   getResearchMessages,
@@ -23,25 +22,8 @@ import {
 import ChildHomeScreen from '@/components/ChildHomeScreen';
 
 export default function HomeScreen() {
-  const [userType, setUserType] = useState<string>('parent');
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadUserType();
-  }, []);
-
-  const loadUserType = async () => {
-    try {
-      const user = await getCurrentUser();
-      if (user?.user_metadata?.user_type) {
-        setUserType(user.user_metadata.user_type);
-      }
-    } catch (error) {
-      console.error('Error loading user type:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // שליפת המידע מה-Hook המרכזי שסידרנו
+  const { profile, linkedChild, isLinkedMode, loading } = useAuth();
 
   if (loading) {
     return (
@@ -51,44 +33,43 @@ export default function HomeScreen() {
     );
   }
 
-  const isChild = userType === 'child_independent' || userType === 'child';
+  // לוגיקה פשוטה וברורה:
+  // אם אני ילד מקושר - או - אם יש לי פרופיל והתפקיד שלי הוא ילד עצמאי
+  const isChildView = isLinkedMode || (profile?.role === 'child_independent');
 
-  if (isChild) {
+  if (isChildView) {
     return <ChildHomeScreen />;
   }
 
-  return <ParentHomeScreen />;
+  // אחרת, אני הורה
+  return <ParentHomeScreen parentName={profile?.full_name || ''} />;
 }
 
-function ParentHomeScreen() {
+// --- קומפוננטת מסך הורים (עודכנה לקבל שם כ-Prop) ---
+
+function ParentHomeScreen({ parentName }: { parentName: string }) {
   const router = useRouter();
   const { getText, loading: textsLoading } = useScreenTexts('parent_home');
+  const { user } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [parentName, setParentName] = useState('');
   const [children, setChildren] = useState<Child[]>([]);
   const [researchMessage, setResearchMessage] = useState('');
 
   const loadData = async () => {
     try {
-      const user = await getCurrentUser();
-      if (!user) {
-        router.replace('/auth/parent-login');
-        return;
+      if (!user) return;
+
+      // 1. קבלת ה-Family ID של ההורה
+      const family = await getFamily(user.id);
+      if (family) {
+        // 2. קבלת הילדים במשפחה
+        const childrenData = await getChildren(family.id);
+        setChildren(childrenData);
       }
 
-      const parent = await getParentProfile(user.id);
-      if (parent) {
-        setParentName(parent.first_name);
-
-        const family = await getFamily(user.id);
-        if (family) {
-          const childrenData = await getChildren(family.id);
-          setChildren(childrenData);
-        }
-      }
-
+      // 3. הודעות מחקר
       const messages = await getResearchMessages();
       if (messages && messages.length > 0) {
         const randomMessage = messages[Math.floor(Math.random() * messages.length)];
@@ -103,7 +84,7 @@ function ParentHomeScreen() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [user]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -186,7 +167,7 @@ function ParentHomeScreen() {
                 <Text style={styles.childAge}>{child.age} שנים</Text>
                 <View style={styles.childStats}>
                   <Text style={styles.childProgress}>
-                    שלב {child.current_step} מתוך {child.total_steps}
+                    שלב {child.current_step || 1} מתוך {child.total_steps || 30}
                   </Text>
                   {child.consecutive_days > 0 && (
                     <View style={styles.streakBadge}>
