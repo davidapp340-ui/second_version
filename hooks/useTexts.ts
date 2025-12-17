@@ -1,74 +1,25 @@
-import { useState, useEffect } from 'react';
-import { getAllTexts, getTextsByScreen, setupRealtimeTextUpdates, TextData } from '@/lib/textService';
+import { HEBREW_TRANSLATIONS, TranslationKey } from '../constants/translations';
 
-export function useTexts(languageCode: string = 'he') {
-  const [texts, setTexts] = useState<TextData>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let unsubscribe: (() => void) | null = null;
-
-    async function loadTexts() {
-      try {
-        setLoading(true);
-        const fetchedTexts = await getAllTexts(languageCode);
-        setTexts(fetchedTexts);
-        setError(null);
-
-        unsubscribe = setupRealtimeTextUpdates(languageCode, (updatedTexts) => {
-          setTexts(updatedTexts);
-        });
-      } catch (err) {
-        console.error('Error loading texts:', err);
-        setError('Failed to load texts');
-      } finally {
-        setLoading(false);
-      }
+export function useTexts() {
+  /**
+   * פונקציה שמקבלת מפתח טקסט ומחזירה את התרגום
+   * @param key - המפתח של הטקסט (למשל 'nav.home')
+   */
+  const getText = (key: TranslationKey | string): string => {
+    // בודק אם המפתח קיים במילון שלנו
+    if (key in HEBREW_TRANSLATIONS) {
+      return HEBREW_TRANSLATIONS[key as TranslationKey];
     }
-
-    loadTexts();
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [languageCode]);
-
-  const getText = (key: string, fallback?: string): string => {
-    return texts[key] || fallback || key;
+    
+    // אם לא מצאנו תרגום (למשל מפתח חדש שעוד לא הוספנו), נחזיר את המפתח עצמו
+    // זה עוזר לזהות איפה חסר טקסט
+    return key;
   };
 
-  return { texts, loading, error, getText };
-}
-
-export function useScreenTexts(screen: string, languageCode: string = 'he') {
-  const [texts, setTexts] = useState<TextData>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function loadTexts() {
-      try {
-        setLoading(true);
-        const fetchedTexts = await getTextsByScreen(screen, languageCode);
-        setTexts(fetchedTexts);
-        setError(null);
-      } catch (err) {
-        console.error(`Error loading texts for screen ${screen}:`, err);
-        setError(`Failed to load texts for ${screen}`);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadTexts();
-  }, [screen, languageCode]);
-
-  const getText = (key: string, fallback?: string): string => {
-    return texts[key] || fallback || key;
+  return {
+    getText,
+    loading: false, // אין טעינה, הטקסט זמין מיידית
+    error: null,
+    refreshTexts: () => {} // פונקציה ריקה כי אין צורך לרענן
   };
-
-  return { texts, loading, error, getText };
 }
