@@ -5,36 +5,45 @@ import { StatusBar } from 'expo-status-bar';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 
-// רכיב "שומר הסף" - מנהל את הניווט וההגנה
+// רכיב "שומר הסף" הפנימי
 function InitialLayout() {
-  const { session, loading, profile } = useAuth();
+  // אנחנו מושכים גם את session וגם את linkedChild
+  const { session, linkedChild, loading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   
-  // מפעיל את התיקונים של הפריימוורק (מהקוד המקורי שלך)
   useFrameworkReady();
 
   useEffect(() => {
     if (loading) return;
 
-    // בדיקה: איפה המשתמש נמצא כרגע?
+    // הגדרת קבוצות מסכים
     const inAuthGroup = segments[0] === 'auth';
     const inTabsGroup = segments[0] === '(tabs)';
-    const inProtectedFlow = inTabsGroup || segments[0] === 'add-child';
+    
+    // רשימת מסכים שפתוחים לכולם (דף הבית, בחירת סוג משתמש, מדיניות)
+    const isPublicRoute = 
+      segments[0] === 'index' || 
+      segments[0] === 'user-type' || 
+      segments[0] === 'consent-policy';
 
-    if (!session) {
-      // תרחיש 1: משתמש לא מחובר מנסה להיכנס לאזור שמור
-      if (inProtectedFlow) {
-        router.replace('/'); // זרוק אותו למסך הפתיחה
+    // בדיקה: האם המשתמש מחובר? (או כהורה/עצמאי עם סשן, או כילד מקושר)
+    const isAuthenticated = !!session || !!linkedChild;
+
+    if (!isAuthenticated) {
+      // --- תרחיש 1: אורח (לא מחובר) ---
+      // אם הוא מנסה להיכנס לאזור שמור (כמו הטאבים או הוספת ילד) -> זרוק אותו החוצה
+      if (inTabsGroup || segments[0] === 'add-child') {
+        router.replace('/'); 
       }
-    } else if (session && profile) {
-      // תרחיש 2: משתמש מחובר מנסה לחזור למסכי התחברות
-      // (למשל, אם הוא לוחץ "אחורה" אחרי התחברות)
-      if (inAuthGroup || segments[0] === 'index' || segments[0] === 'user-type') {
-        router.replace('/(tabs)'); // העבר אותו לאפליקציה
+    } else {
+      // --- תרחיש 2: מחובר (הורה או ילד) ---
+      // אם הוא מנסה לחזור למסכי התחברות או לדף הפתיחה -> שלח אותו לאפליקציה
+      if (inAuthGroup || isPublicRoute) {
+        router.replace('/(tabs)');
       }
     }
-  }, [session, loading, segments, profile]);
+  }, [session, linkedChild, loading, segments]);
 
   // מסך טעינה בזמן שהמערכת בודקת מי המשתמש
   if (loading) {
@@ -48,20 +57,27 @@ function InitialLayout() {
   return (
     <>
       <Stack screenOptions={{ headerShown: false }}>
+        {/* מסכים ציבוריים */}
         <Stack.Screen name="index" />
         <Stack.Screen name="user-type" />
+        <Stack.Screen name="consent-policy" />
+        
+        {/* מסכי אימות (Login/Signup) */}
         <Stack.Screen name="auth" />
+        
+        {/* האפליקציה עצמה (מוגן) */}
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="add-child" />
-        <Stack.Screen name="consent-policy" />
+        
+        {/* מסך שגיאה כללי */}
         <Stack.Screen name="+not-found" />
       </Stack>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
     </>
   );
 }
 
-// הרכיב הראשי - עוטף את הכל ב"מוח" של המערכת
+// הרכיב הראשי שעוטף הכל בספק האימות
 export default function RootLayout() {
   return (
     <AuthProvider>
