@@ -1,12 +1,11 @@
 /*
-  MASTER SCHEMA V2 - COMPLETE & FIXED
+  MASTER SCHEMA V3 - FINAL & COMPLETE
   -----------------------------------
-  מכיל את כל טבלאות המערכת (משתמשים + אימונים).
-  תוקן כדי לאפשר הרשמה חלקה (ללא תלות מעגלית בין הורה למשפחה).
+  סה"כ טבלאות: 10
 */
 
 -- ==========================================
--- 1. ניקוי מלא (DROP ALL)
+-- 1. ניקוי מלא (מחיקת כל הטבלאות הישנות)
 -- ==========================================
 DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS track_day_completions CASCADE;
@@ -20,53 +19,50 @@ DROP TABLE IF EXISTS parents CASCADE;
 DROP TABLE IF EXISTS families CASCADE;
 
 -- ==========================================
--- 2. משתמשים ומשפחה (התיקון המבני)
+-- 2. משתמשים ומשפחה (3 טבלאות)
 -- ==========================================
 
--- א. משפחה (ללא תלות בהורה)
+-- 1. משפחה (הבסיס)
 CREATE TABLE families (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text DEFAULT 'My Family',
   created_at timestamptz DEFAULT now()
 );
 
--- ב. הורים (מצביעים על משפחה)
+-- 2. הורים
 CREATE TABLE parents (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   family_id uuid REFERENCES families(id) ON DELETE SET NULL,
-  name text NOT NULL, -- שינינו מ-first_name ל-name כדי להתאים לקוד
+  name text NOT NULL,
   email text NOT NULL,
   created_at timestamptz DEFAULT now()
 );
 
--- ג. ילדים
+-- 3. ילדים
 CREATE TABLE children (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  family_id uuid REFERENCES families(id) ON DELETE CASCADE,
-  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  family_id uuid REFERENCES families(id) ON DELETE CASCADE, -- שייך למשפחה
+  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL, -- אופציונלי (אם הילד עצמאי)
   name text NOT NULL,
   age integer NOT NULL,
   avatar_url text DEFAULT 'default',
-  
-  -- שדות שנוספו/שונו להתאמה לקוד:
   is_independent boolean DEFAULT false,
   points integer DEFAULT 0,
-  
-  -- שדות נוספים
-  linking_code text,
   daily_streak integer DEFAULT 0,
+  linking_code text,
   created_at timestamptz DEFAULT now()
 );
 
 -- ==========================================
--- 3. תרגילים ומסלולים (נשמר מהמקור)
+-- 3. תוכן: תרגילים ומסלולים (4 טבלאות)
 -- ==========================================
 
+-- 4. תרגילים
 CREATE TABLE eye_exercises (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
   description text NOT NULL,
-  media_type text DEFAULT 'Video',
+  media_type text DEFAULT 'Video', 
   video_url text,
   icon text,
   category text NOT NULL,
@@ -74,6 +70,7 @@ CREATE TABLE eye_exercises (
   created_at timestamptz DEFAULT now()
 );
 
+-- 5. מסלולים
 CREATE TABLE training_tracks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
@@ -84,6 +81,7 @@ CREATE TABLE training_tracks (
   created_at timestamptz DEFAULT now()
 );
 
+-- 6. ימים במסלול
 CREATE TABLE track_days (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   track_id uuid NOT NULL REFERENCES training_tracks(id) ON DELETE CASCADE,
@@ -95,6 +93,7 @@ CREATE TABLE track_days (
   UNIQUE(track_id, day_number)
 );
 
+-- 7. שיוך תרגילים לימים
 CREATE TABLE track_day_assignments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   track_day_id uuid NOT NULL REFERENCES track_days(id) ON DELETE CASCADE,
@@ -105,9 +104,10 @@ CREATE TABLE track_day_assignments (
 );
 
 -- ==========================================
--- 4. התקדמות והתראות (נשמר מהמקור)
+-- 4. התקדמות והתראות (3 טבלאות)
 -- ==========================================
 
+-- 8. מעקב התקדמות (איפה הילד עומד?)
 CREATE TABLE user_track_progress (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   child_id uuid NOT NULL REFERENCES children(id) ON DELETE CASCADE,
@@ -118,6 +118,7 @@ CREATE TABLE user_track_progress (
   UNIQUE(child_id, track_id)
 );
 
+-- 9. היסטוריית ביצועים (לוגים)
 CREATE TABLE track_day_completions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   child_id uuid NOT NULL REFERENCES children(id) ON DELETE CASCADE,
@@ -126,6 +127,7 @@ CREATE TABLE track_day_completions (
   duration_spent integer DEFAULT 0
 );
 
+-- 10. התראות
 CREATE TABLE notifications (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -136,10 +138,9 @@ CREATE TABLE notifications (
 );
 
 -- ==========================================
--- 5. אבטחה (RLS Policies) - מותאם להרשמה
+-- 5. אבטחה (RLS Policies)
 -- ==========================================
 
--- הפעלת RLS
 ALTER TABLE families ENABLE ROW LEVEL SECURITY;
 ALTER TABLE parents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE children ENABLE ROW LEVEL SECURITY;
@@ -148,31 +149,24 @@ ALTER TABLE training_tracks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE track_days ENABLE ROW LEVEL SECURITY;
 ALTER TABLE track_day_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_track_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE track_day_completions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
--- מדיניות למשפחות (Families)
-CREATE POLICY "Enable insert for authenticated users only" ON families FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Enable select for authenticated users only" ON families FOR SELECT TO authenticated USING (true);
+-- הרשאות גישה למשתמשים מחוברים
+CREATE POLICY "Auth users full access families" ON families FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Auth users full access parents" ON parents FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Auth users full access children" ON children FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
--- מדיניות להורים (Parents)
-CREATE POLICY "Enable insert for users based on user_id" ON parents FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
-CREATE POLICY "Enable select for users based on user_id" ON parents FOR SELECT TO authenticated USING (auth.uid() = id);
+-- קריאת תוכן
+CREATE POLICY "Read exercises" ON eye_exercises FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Read tracks" ON training_tracks FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Read track days" ON track_days FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Read assignments" ON track_day_assignments FOR SELECT TO authenticated USING (true);
 
--- מדיניות לילדים (Children)
-CREATE POLICY "Enable insert for children" ON children FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Enable select for children" ON children FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Enable update for children" ON children FOR UPDATE TO authenticated USING (true);
-
--- מדיניות ציבורית (לקריאת תרגילים ומסלולים)
-CREATE POLICY "Public read exercises" ON eye_exercises FOR SELECT USING (true);
-CREATE POLICY "Public read tracks" ON training_tracks FOR SELECT USING (true);
-CREATE POLICY "Public read days" ON track_days FOR SELECT USING (true);
-CREATE POLICY "Public read assignments" ON track_day_assignments FOR SELECT USING (true);
-
--- מדיניות התקדמות (Progress)
-CREATE POLICY "Users manage progress" ON user_track_progress FOR ALL USING (true);
-CREATE POLICY "Users manage completions" ON track_day_completions FOR ALL USING (true);
-CREATE POLICY "Users manage notifications" ON notifications FOR ALL USING (auth.uid() = user_id);
+-- ניהול התקדמות
+CREATE POLICY "Manage progress" ON user_track_progress FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Manage completions" ON track_day_completions FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Manage notifications" ON notifications FOR ALL TO authenticated USING (auth.uid() = user_id);
 
 -- ==========================================
 -- 6. נתונים ראשוניים (Seed Data)
@@ -180,29 +174,31 @@ CREATE POLICY "Users manage notifications" ON notifications FOR ALL USING (auth.
 
 INSERT INTO eye_exercises (name, description, category, color, icon) VALUES
 ('Palming', 'חימום כפות ידיים וכיסוי העיניים.', 'הרפיה', '#4ECDC4', '🤲'),
-('Blinking', 'מצמוץ מהיר וקל.', 'יובש', '#FF6B6B', '👀');
+('Blinking', 'מצמוץ מהיר וקל.', 'יובש', '#FF6B6B', '👀'),
+('Near & Far', 'התמקדות באובייקט קרוב ואז רחוק.', 'פוקוס', '#FFE66D', '↔️');
 
 DO $$
 DECLARE
   v_track_id uuid;
-  v_day_id uuid;
+  v_day1_id uuid;
   v_ex1_id uuid;
+  v_ex2_id uuid;
 BEGIN
   -- יצירת מסלול
   INSERT INTO training_tracks (name, title_he, total_days)
   VALUES ('Beginner', 'מסלול מתחילים - 30 יום', 30) RETURNING id INTO v_track_id;
 
-  -- שליפת תרגיל
   SELECT id INTO v_ex1_id FROM eye_exercises WHERE name = 'Palming';
+  SELECT id INTO v_ex2_id FROM eye_exercises WHERE name = 'Blinking';
 
-  -- יצירת היום הראשון (פתוח)
+  -- יום 1 (פתוח)
   INSERT INTO track_days (track_id, day_number, title_he, description_he, is_locked)
-  VALUES (v_track_id, 1, 'יום היכרות', 'מתחילים ברגוע', false) RETURNING id INTO v_day_id;
+  VALUES (v_track_id, 1, 'התחלה רגועה', 'תרגילי בסיס', false) RETURNING id INTO v_day1_id;
 
-  INSERT INTO track_day_assignments (track_day_id, exercise_id)
-  VALUES (v_day_id, v_ex1_id);
+  INSERT INTO track_day_assignments (track_day_id, exercise_id, exercise_order, duration_seconds)
+  VALUES (v_day1_id, v_ex1_id, 1, 60), (v_day1_id, v_ex2_id, 2, 45);
   
-  -- יצירת ימים נוספים (נעולים)
+  -- ימים 2-30 (נעולים)
   FOR i IN 2..30 LOOP
     INSERT INTO track_days (track_id, day_number, title_he, is_locked)
     VALUES (v_track_id, i, 'יום ' || i, true);
