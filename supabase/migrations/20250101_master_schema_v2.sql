@@ -1,13 +1,13 @@
 /*
-  MASTER SCHEMA V2 - FIXED & ALIGNED
-  ----------------------------------
-  מותאם בדיוק לקוד ה-React Native:
-  1. families: לא דורש הורה (מאפשר יצירה ראשונית וילדים עצמאיים).
-  2. parents: כולל family_id ושם שדה name.
-  3. children: כולל is_independent ושם שדה points.
+  MASTER SCHEMA V2 - COMPLETE & FIXED
+  -----------------------------------
+  מכיל את כל טבלאות המערכת (משתמשים + אימונים).
+  תוקן כדי לאפשר הרשמה חלקה (ללא תלות מעגלית בין הורה למשפחה).
 */
 
--- 1. ניקוי טבלאות קודמות (בסדר נכון למניעת שגיאות קשרי גומלין)
+-- ==========================================
+-- 1. ניקוי מלא (DROP ALL)
+-- ==========================================
 DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS track_day_completions CASCADE;
 DROP TABLE IF EXISTS user_track_progress CASCADE;
@@ -20,38 +20,37 @@ DROP TABLE IF EXISTS parents CASCADE;
 DROP TABLE IF EXISTS families CASCADE;
 
 -- ==========================================
--- חלק א': תשתית משפחתית
+-- 2. משתמשים ומשפחה (התיקון המבני)
 -- ==========================================
 
--- טבלת משפחות - הלב של המערכת
+-- א. משפחה (ללא תלות בהורה)
 CREATE TABLE families (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text DEFAULT 'My Family',
   created_at timestamptz DEFAULT now()
-  -- הסרנו את parent_id כדי למנוע מעגליות ולאפשר ילדים עצמאיים
 );
 
--- טבלת הורים
+-- ב. הורים (מצביעים על משפחה)
 CREATE TABLE parents (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  family_id uuid REFERENCES families(id) ON DELETE SET NULL, -- הקישור למשפחה
-  name text NOT NULL, -- תואם לקוד (במקום first_name)
+  family_id uuid REFERENCES families(id) ON DELETE SET NULL,
+  name text NOT NULL, -- שינינו מ-first_name ל-name כדי להתאים לקוד
   email text NOT NULL,
   created_at timestamptz DEFAULT now()
 );
 
--- טבלת ילדים
+-- ג. ילדים
 CREATE TABLE children (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   family_id uuid REFERENCES families(id) ON DELETE CASCADE,
   user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   name text NOT NULL,
   age integer NOT NULL,
-  avatar_url text,
+  avatar_url text DEFAULT 'default',
   
-  -- שדות לוגיקה ייחודיים
-  is_independent boolean DEFAULT false, -- תואם לקוד
-  points integer DEFAULT 0,             -- תואם לקוד (במקום total_points)
+  -- שדות שנוספו/שונו להתאמה לקוד:
+  is_independent boolean DEFAULT false,
+  points integer DEFAULT 0,
   
   -- שדות נוספים
   linking_code text,
@@ -60,7 +59,7 @@ CREATE TABLE children (
 );
 
 -- ==========================================
--- חלק ב': תרגילים ומסלולים
+-- 3. תרגילים ומסלולים (נשמר מהמקור)
 -- ==========================================
 
 CREATE TABLE eye_exercises (
@@ -106,7 +105,7 @@ CREATE TABLE track_day_assignments (
 );
 
 -- ==========================================
--- חלק ג': התקדמות והתראות
+-- 4. התקדמות והתראות (נשמר מהמקור)
 -- ==========================================
 
 CREATE TABLE user_track_progress (
@@ -137,10 +136,10 @@ CREATE TABLE notifications (
 );
 
 -- ==========================================
--- חלק ד': אבטחה (RLS Policies) - פתוח לכתיבה
+-- 5. אבטחה (RLS Policies) - מותאם להרשמה
 -- ==========================================
 
--- הפעלת מנגנון האבטחה
+-- הפעלת RLS
 ALTER TABLE families ENABLE ROW LEVEL SECURITY;
 ALTER TABLE parents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE children ENABLE ROW LEVEL SECURITY;
@@ -151,35 +150,32 @@ ALTER TABLE track_day_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_track_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
--- 1. מדיניות למשפחות
--- מאפשר לכל משתמש מחובר ליצור משפחה (הורה או ילד עצמאי)
-CREATE POLICY "Users can insert families" ON families FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Users can view families" ON families FOR SELECT TO authenticated USING (true);
+-- מדיניות למשפחות (Families)
+CREATE POLICY "Enable insert for authenticated users only" ON families FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Enable select for authenticated users only" ON families FOR SELECT TO authenticated USING (true);
 
--- 2. מדיניות להורים
--- מאפשר למשתמש ליצור את הפרופיל של עצמו
-CREATE POLICY "Users can insert own parent" ON parents FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
-CREATE POLICY "Users can view own parent" ON parents FOR SELECT TO authenticated USING (auth.uid() = id);
+-- מדיניות להורים (Parents)
+CREATE POLICY "Enable insert for users based on user_id" ON parents FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+CREATE POLICY "Enable select for users based on user_id" ON parents FOR SELECT TO authenticated USING (auth.uid() = id);
 
--- 3. מדיניות לילדים
--- מאפשר יצירת פרופיל (בין אם ע"י הילד עצמו או ע"י הורה)
-CREATE POLICY "Users can insert children" ON children FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Users can view children" ON children FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Children can update points" ON children FOR UPDATE TO authenticated USING (true);
+-- מדיניות לילדים (Children)
+CREATE POLICY "Enable insert for children" ON children FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Enable select for children" ON children FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Enable update for children" ON children FOR UPDATE TO authenticated USING (true);
 
--- 4. מדיניות ציבורית לתוכן
+-- מדיניות ציבורית (לקריאת תרגילים ומסלולים)
 CREATE POLICY "Public read exercises" ON eye_exercises FOR SELECT USING (true);
 CREATE POLICY "Public read tracks" ON training_tracks FOR SELECT USING (true);
 CREATE POLICY "Public read days" ON track_days FOR SELECT USING (true);
 CREATE POLICY "Public read assignments" ON track_day_assignments FOR SELECT USING (true);
 
--- 5. מדיניות התקדמות
+-- מדיניות התקדמות (Progress)
 CREATE POLICY "Users manage progress" ON user_track_progress FOR ALL USING (true);
 CREATE POLICY "Users manage completions" ON track_day_completions FOR ALL USING (true);
-
+CREATE POLICY "Users manage notifications" ON notifications FOR ALL USING (auth.uid() = user_id);
 
 -- ==========================================
--- חלק ה': נתונים ראשוניים (Seed Data)
+-- 6. נתונים ראשוניים (Seed Data)
 -- ==========================================
 
 INSERT INTO eye_exercises (name, description, category, color, icon) VALUES
@@ -192,18 +188,21 @@ DECLARE
   v_day_id uuid;
   v_ex1_id uuid;
 BEGIN
+  -- יצירת מסלול
   INSERT INTO training_tracks (name, title_he, total_days)
   VALUES ('Beginner', 'מסלול מתחילים - 30 יום', 30) RETURNING id INTO v_track_id;
 
+  -- שליפת תרגיל
   SELECT id INTO v_ex1_id FROM eye_exercises WHERE name = 'Palming';
 
+  -- יצירת היום הראשון (פתוח)
   INSERT INTO track_days (track_id, day_number, title_he, description_he, is_locked)
   VALUES (v_track_id, 1, 'יום היכרות', 'מתחילים ברגוע', false) RETURNING id INTO v_day_id;
 
   INSERT INTO track_day_assignments (track_day_id, exercise_id)
   VALUES (v_day_id, v_ex1_id);
   
-  -- יצירת ימים נוספים
+  -- יצירת ימים נוספים (נעולים)
   FOR i IN 2..30 LOOP
     INSERT INTO track_days (track_id, day_number, title_he, is_locked)
     VALUES (v_track_id, i, 'יום ' || i, true);
