@@ -15,12 +15,10 @@ import {
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowRight, User, Lock, Mail, Calendar } from 'lucide-react-native';
-import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/hooks/useAuth'; // 1. ייבוא ה-Hook החדש
+import { signUpIndependentChild } from '@/lib/authService';
 
 export default function ChildIndependentSignup() {
   const router = useRouter();
-  const { refreshProfile } = useAuth(); // 2. שליפת פונקציית הרענון
   const [loading, setLoading] = useState(false);
 
   // טופס הרשמה
@@ -37,63 +35,26 @@ export default function ChildIndependentSignup() {
 
     setLoading(true);
     try {
-      // 1. יצירת המשתמש במערכת האימות (Auth)
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      // הקסם קורה כאן: קריאה לפונקציה אחת פשוטה
+      // המסד נתונים (SQL) כבר ייצור אוטומטית את המשפחה והפרופיל ברקע
+      const { error } = await signUpIndependentChild({
         email,
         password,
-        options: {
-          data: {
-            full_name: name,
-            age: parseInt(age),
-            user_type: 'child_independent',
-          },
-        },
+        name,
+        age,
+        avatarUrl: 'default_child_avatar'
       });
 
-      if (authError) throw authError;
-      if (!authData.user) throw new Error('לא הצלחנו ליצור את המשתמש');
+      if (error) {
+        Alert.alert('אופס...', 'משהו השתבש בהרשמה. אולי האימייל הזה כבר תפוס?');
+        return;
+      }
 
-      const userId = authData.user.id;
-
-      // 2. יצירת "משפחה" עבור הילד (ללא תלות בהורה)
-      const { data: familyData, error: familyError } = await supabase
-        .from('families')
-        .insert({
-          name: `המסע של ${name}`,
-        })
-        .select()
-        .single();
-
-      if (familyError) throw familyError;
-
-      // 3. יצירת פרופיל הילד
-      const { error: childError } = await supabase
-        .from('children')
-        .insert({
-          id: userId,           // ה-ID הזהה ל-Auth
-          family_id: familyData.id,
-          user_id: userId,      // גיבוי (אופציונלי, תלוי בסכמה)
-          name: name,
-          age: parseInt(age),
-          is_independent: true, // דגל חשוב!
-          points: 0,
-          avatar_url: 'default_child_avatar',
-        });
-
-      if (childError) throw childError;
-
-      // 4. שלב קריטי: רענון הפרופיל והמתנה
-      // זה מבטיח שהאפליקציה תדע שהמשתמש החדש הוא "ילד" ותכניס אותו פנימה
-      await new Promise(resolve => setTimeout(resolve, 500)); // המתנה קטנה למסד הנתונים
-      await refreshProfile();
-
-      Alert.alert('איזה כיף!', 'החשבון נוצר בהצלחה. בוא נתחיל להתאמן!', [
-        { text: 'קדימה!', onPress: () => router.replace('/(tabs)') }
-      ]);
-
+      // הצלחה! האפליקציה תזהה את המשתמש החדש אוטומטית ותעביר למסך הבית
+      // (אין צורך לנווט ידנית, ה-_layout יעשה את זה)
     } catch (error: any) {
       console.error('Error signing up independent child:', error);
-      Alert.alert('אופס...', 'משהו השתבש בהרשמה. נסה שוב או בקש עזרה ממבוגר.');
+      Alert.alert('שגיאה', 'משהו לא עבד. נסה שוב.');
     } finally {
       setLoading(false);
     }
@@ -102,7 +63,7 @@ export default function ChildIndependentSignup() {
   return (
     <View style={styles.container}>
       <LinearGradient
-        colors={['#FF9F4F', '#FF6B6B']} // צבעים חמים וכיפיים לילדים
+        colors={['#FF9F4F', '#FF6B6B']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.header}
@@ -123,7 +84,6 @@ export default function ChildIndependentSignup() {
       >
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.illustrationContainer}>
-             {/* תמונה של הדמות */}
              <Image 
                 source={require('@/assets/images/icon.png')} 
                 style={styles.characterImage}
@@ -213,7 +173,7 @@ export default function ChildIndependentSignup() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFF5F0', // רקע בהיר וחמים
+    backgroundColor: '#FFF5F0',
   },
   header: {
     paddingTop: 60,
