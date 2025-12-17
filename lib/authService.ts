@@ -2,9 +2,8 @@ import { supabase } from './supabase';
 
 // --- פונקציות עזר ---
 
-// פונקציה ליצירת קוד קישור רנדומלי (6 תווים: אותיות ומספרים)
 function generateLinkingCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // ללא I, O, 1, 0 למניעת בלבול
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let result = '';
   for (let i = 0; i < 6; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -14,17 +13,17 @@ function generateLinkingCode(): string {
 
 // --- פונקציות אימות והרשמה ---
 
-// 1. הרשמת הורה (יוצר גם משפחה אוטומטית)
-export async function signUpParent(email: string, password: string, firstName: string) {
+// 1. הרשמת הורה (הגרסה המתוקנת והמלאה)
+export async function signUpParent(email: string, password: string, fullName: string) {
   try {
-    // א. יצירת המשתמש במערכת האימות
+    // א. יצירת המשתמש במערכת האימות (Auth)
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
-          first_name: firstName,
-          role: 'parent' // סימון תפקיד למקרה הצורך
+          name: fullName, // שימוש ב-name כדי להיות עקבי
+          role: 'parent'
         }
       }
     });
@@ -32,26 +31,29 @@ export async function signUpParent(email: string, password: string, firstName: s
     if (authError) throw authError;
     if (!authData.user) throw new Error('No user data returned');
 
-    // ב. יצירת פרופיל הורה בטבלת parents
+    // ב. יצירת משפחה חדשה (קודם כל המשפחה!)
+    // אנחנו יוצרים שורה בטבלת families ומקבלים חזרה את ה-ID שלה
+    const { data: familyData, error: familyError } = await supabase
+      .from('families')
+      .insert({
+        name: `משפחת ${fullName}`
+      })
+      .select()
+      .single();
+
+    if (familyError) throw familyError;
+
+    // ג. יצירת פרופיל הורה (שמצביע על המשפחה שנוצרה)
     const { error: parentError } = await supabase
       .from('parents')
       .insert({
-        id: authData.user.id,
-        first_name: firstName,
+        id: authData.user.id,     // אותו ID כמו ב-Auth
+        family_id: familyData.id, // הקישור למשפחה שיצרנו הרגע
+        name: fullName,
         email: email
       });
 
     if (parentError) throw parentError;
-
-    // ג. יצירת משפחה חדשה עבור ההורה בטבלת families
-    const { error: familyError } = await supabase
-      .from('families')
-      .insert({
-        parent_id: authData.user.id,
-        name: 'My Family' // שם ברירת מחדל, ניתן לשינוי בהגדרות
-      });
-
-    if (familyError) throw familyError;
 
     return { user: authData.user, error: null };
   } catch (error) {
@@ -60,7 +62,7 @@ export async function signUpParent(email: string, password: string, firstName: s
   }
 }
 
-// 2. הרשמת ילד עצמאי (ללא הורה מפקח) - התיקון הגדול
+// 2. הרשמת ילד עצמאי
 export async function signUpIndependentChild(data: {
   email: string;
   password: string;
@@ -69,42 +71,29 @@ export async function signUpIndependentChild(data: {
   avatarUrl: string;
 }) {
   try {
-    // א. יצירת המשתמש
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: data.email,
       password: data.password,
-      options: {
-        data: {
-          role: 'child_independent'
-        }
-      }
+      options: { data: { role: 'child_independent' } }
     });
 
     if (authError) throw authError;
     if (!authData.user) throw new Error('No user data returned');
 
-    // ב. יצירת פרופיל הילד בטבלת children
-    // שים לב: אנחנו שולחים את כל שדות החובה, כולל linking_code שנוצר כאן
     const { error: profileError } = await supabase
       .from('children')
       .insert({
         user_id: authData.user.id,
         name: data.name,
-        age: parseInt(data.age, 10), // המרה בטוחה למספר
+        age: parseInt(data.age, 10),
         avatar_url: data.avatarUrl,
-        linking_code: generateLinkingCode(), // יצירת קוד חובה
-        is_linked: false,
-        total_points: 0,
-        current_step: 1,
+        linking_code: generateLinkingCode(),
+        is_independent: true,
+        points: 0,
         daily_streak: 0
-        // family_id לא נשלח כי הוא אופציונלי עכשיו (NULL)
       });
 
-    if (profileError) {
-      console.error('Child profile creation failed:', profileError);
-      // במצב אידיאלי היינו מוחקים את המשתמש שנוצר, אך כרגע נסתפק בהודעת שגיאה
-      throw new Error('שגיאה ביצירת פרופיל הילד במסד הנתונים');
-    }
+    if (profileError) throw profileError;
 
     return { user: authData.user, error: null };
   } catch (error) {
@@ -113,14 +102,13 @@ export async function signUpIndependentChild(data: {
   }
 }
 
-// 3. התחברות כללית (מתאים גם להורה וגם לילד)
+// 3. התחברות כללית
 export async function signIn(email: string, password: string) {
   try {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
-    
     if (error) throw error;
     return { user: data.user, error: null };
   } catch (error) {
@@ -131,16 +119,6 @@ export async function signIn(email: string, password: string) {
 
 // 4. התנתקות
 export async function signOut() {
-  try {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-  } catch (error) {
-    console.error('Sign out error:', error);
-  }
-}
-
-// 5. בדיקת המשתמש הנוכחי
-export async function getCurrentUser() {
-  const { data: { user } } = await supabase.auth.getUser();
-  return user;
+  const { error } = await supabase.auth.signOut();
+  if (error) console.error('Sign out error:', error);
 }
