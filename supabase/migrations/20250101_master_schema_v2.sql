@@ -1,10 +1,13 @@
 /*
-  MASTER SCHEMA V2 - FINAL FIX
-  ----------------------------
-  כולל תמיכה מובנית בילדים עצמאיים (ללא חובת משפחה).
+  MASTER SCHEMA V2 - FIXED & ALIGNED
+  ----------------------------------
+  מותאם בדיוק לקוד ה-React Native:
+  1. families: לא דורש הורה (מאפשר יצירה ראשונית וילדים עצמאיים).
+  2. parents: כולל family_id ושם שדה name.
+  3. children: כולל is_independent ושם שדה points.
 */
 
--- 1. ניקוי מלא
+-- 1. ניקוי טבלאות קודמות (בסדר נכון למניעת שגיאות קשרי גומלין)
 DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS track_day_completions CASCADE;
 DROP TABLE IF EXISTS user_track_progress CASCADE;
@@ -12,41 +15,46 @@ DROP TABLE IF EXISTS track_day_assignments CASCADE;
 DROP TABLE IF EXISTS track_days CASCADE;
 DROP TABLE IF EXISTS training_tracks CASCADE;
 DROP TABLE IF EXISTS eye_exercises CASCADE;
-DROP TABLE IF EXISTS research_messages CASCADE;
 DROP TABLE IF EXISTS children CASCADE;
-DROP TABLE IF EXISTS families CASCADE;
 DROP TABLE IF EXISTS parents CASCADE;
+DROP TABLE IF EXISTS families CASCADE;
 
 -- ==========================================
--- חלק א': משתמשים ומשפחה
+-- חלק א': תשתית משפחתית
 -- ==========================================
 
+-- טבלת משפחות - הלב של המערכת
+CREATE TABLE families (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text DEFAULT 'My Family',
+  created_at timestamptz DEFAULT now()
+  -- הסרנו את parent_id כדי למנוע מעגליות ולאפשר ילדים עצמאיים
+);
+
+-- טבלת הורים
 CREATE TABLE parents (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  first_name text NOT NULL,
+  family_id uuid REFERENCES families(id) ON DELETE SET NULL, -- הקישור למשפחה
+  name text NOT NULL, -- תואם לקוד (במקום first_name)
   email text NOT NULL,
   created_at timestamptz DEFAULT now()
 );
 
-CREATE TABLE families (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  parent_id uuid NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
-  name text DEFAULT 'My Family',
-  created_at timestamptz DEFAULT now()
-);
-
+-- טבלת ילדים
 CREATE TABLE children (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  -- התיקון: family_id הוא עכשיו אופציונלי (יכול להיות NULL לילד עצמאי)
   family_id uuid REFERENCES families(id) ON DELETE CASCADE,
   user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   name text NOT NULL,
   age integer NOT NULL,
   avatar_url text,
-  linking_code text UNIQUE NOT NULL,
-  is_linked boolean DEFAULT false,
-  current_step integer DEFAULT 1,
-  total_points integer DEFAULT 0,
+  
+  -- שדות לוגיקה ייחודיים
+  is_independent boolean DEFAULT false, -- תואם לקוד
+  points integer DEFAULT 0,             -- תואם לקוד (במקום total_points)
+  
+  -- שדות נוספים
+  linking_code text,
   daily_streak integer DEFAULT 0,
   created_at timestamptz DEFAULT now()
 );
@@ -129,11 +137,12 @@ CREATE TABLE notifications (
 );
 
 -- ==========================================
--- חלק ד': אבטחה (RLS) - התיקון הקריטי
+-- חלק ד': אבטחה (RLS Policies) - פתוח לכתיבה
 -- ==========================================
 
-ALTER TABLE parents ENABLE ROW LEVEL SECURITY;
+-- הפעלת מנגנון האבטחה
 ALTER TABLE families ENABLE ROW LEVEL SECURITY;
+ALTER TABLE parents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE children ENABLE ROW LEVEL SECURITY;
 ALTER TABLE eye_exercises ENABLE ROW LEVEL SECURITY;
 ALTER TABLE training_tracks ENABLE ROW LEVEL SECURITY;
@@ -142,30 +151,35 @@ ALTER TABLE track_day_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_track_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
--- מדיניות קריאה ציבורית (תרגילים ומסלולים)
+-- 1. מדיניות למשפחות
+-- מאפשר לכל משתמש מחובר ליצור משפחה (הורה או ילד עצמאי)
+CREATE POLICY "Users can insert families" ON families FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Users can view families" ON families FOR SELECT TO authenticated USING (true);
+
+-- 2. מדיניות להורים
+-- מאפשר למשתמש ליצור את הפרופיל של עצמו
+CREATE POLICY "Users can insert own parent" ON parents FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can view own parent" ON parents FOR SELECT TO authenticated USING (auth.uid() = id);
+
+-- 3. מדיניות לילדים
+-- מאפשר יצירת פרופיל (בין אם ע"י הילד עצמו או ע"י הורה)
+CREATE POLICY "Users can insert children" ON children FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Users can view children" ON children FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Children can update points" ON children FOR UPDATE TO authenticated USING (true);
+
+-- 4. מדיניות ציבורית לתוכן
 CREATE POLICY "Public read exercises" ON eye_exercises FOR SELECT USING (true);
 CREATE POLICY "Public read tracks" ON training_tracks FOR SELECT USING (true);
 CREATE POLICY "Public read days" ON track_days FOR SELECT USING (true);
 CREATE POLICY "Public read assignments" ON track_day_assignments FOR SELECT USING (true);
 
--- מדיניות הרשמה לילדים עצמאיים (חשוב מאוד!)
-CREATE POLICY "Children can insert own profile" ON children FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Children can update own profile" ON children FOR UPDATE TO authenticated USING (auth.uid() = user_id);
-CREATE POLICY "Children can read own profile" ON children FOR SELECT TO authenticated USING (auth.uid() = user_id);
+-- 5. מדיניות התקדמות
+CREATE POLICY "Users manage progress" ON user_track_progress FOR ALL USING (true);
+CREATE POLICY "Users manage completions" ON track_day_completions FOR ALL USING (true);
 
--- מדיניות הורים
-CREATE POLICY "Parents manage own data" ON parents FOR ALL USING (auth.uid() = id);
-
--- מדיניות התקדמות
-CREATE POLICY "Users manage own progress" ON user_track_progress FOR ALL USING (
-  EXISTS (SELECT 1 FROM children WHERE id = user_track_progress.child_id AND user_id = auth.uid())
-);
-CREATE POLICY "Users manage completions" ON track_day_completions FOR ALL USING (
-  EXISTS (SELECT 1 FROM children WHERE id = track_day_completions.child_id AND user_id = auth.uid())
-);
 
 -- ==========================================
--- חלק ה': נתונים ראשוניים
+-- חלק ה': נתונים ראשוניים (Seed Data)
 -- ==========================================
 
 INSERT INTO eye_exercises (name, description, category, color, icon) VALUES
@@ -189,70 +203,9 @@ BEGIN
   INSERT INTO track_day_assignments (track_day_id, exercise_id)
   VALUES (v_day_id, v_ex1_id);
   
-  -- יצירת ימים נוספים (נעולים)
+  -- יצירת ימים נוספים
   FOR i IN 2..30 LOOP
     INSERT INTO track_days (track_id, day_number, title_he, is_locked)
     VALUES (v_track_id, i, 'יום ' || i, true);
   END LOOP;
 END $$;
--- =============================================
--- Security & Policies (RLS) - הוסף את זה לסוף הקובץ
--- =============================================
-
--- 1. אפשור RLS לטבלאות
-ALTER TABLE public.families ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.parents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.children ENABLE ROW LEVEL SECURITY;
-
--- 2. מדיניות למשפחות (Families)
--- הרשאה: כל משתמש מחובר יכול ליצור משפחה חדשה
-CREATE POLICY "Users can create families" 
-ON public.families 
-FOR INSERT 
-TO authenticated 
-WITH CHECK (true);
-
--- הרשאה: משתמשים יכולים לראות את המשפחה שלהם (כרגע פתוח לקריאה למחוברים כדי למנוע חסימות בלוגין)
-CREATE POLICY "Users can view families" 
-ON public.families 
-FOR SELECT 
-TO authenticated 
-USING (true);
-
--- 3. מדיניות להורים (Parents)
--- הרשאה: משתמש יכול ליצור פרופיל הורה לעצמו (ה-ID חייב להתאים)
-CREATE POLICY "Users can insert their own parent profile" 
-ON public.parents 
-FOR INSERT 
-TO authenticated 
-WITH CHECK (auth.uid() = id);
-
--- הרשאה: משתמש יכול לראות את הפרופיל של עצמו
-CREATE POLICY "Users can view their own parent profile" 
-ON public.parents 
-FOR SELECT 
-TO authenticated 
-USING (auth.uid() = id);
-
--- 4. מדיניות לילדים (Children)
--- הרשאה: יצירת פרופיל ילד (מכסה גם ילד עצמאי וגם הורה שמוסיף ילד)
-CREATE POLICY "Users can insert child profiles" 
-ON public.children 
-FOR INSERT 
-TO authenticated 
-WITH CHECK (true);
-
--- הרשאה: צפייה בפרופיל ילד (כרגע פתוח למחוברים, בהמשך נדייק לפי משפחה)
-CREATE POLICY "Users can view child profiles" 
-ON public.children 
-FOR SELECT 
-TO authenticated 
-USING (true);
-
--- מדיניות עדכון (Update) - כדי שילדים יוכלו לעדכן התקדמות
-CREATE POLICY "Children can update their own progress" 
-ON public.children 
-FOR UPDATE
-TO authenticated
-USING (auth.uid() = id)
-WITH CHECK (auth.uid() = id);
