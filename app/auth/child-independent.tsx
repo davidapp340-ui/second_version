@@ -1,303 +1,316 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Image,
+} from 'react-native';
+import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-// התיקון: ייבוא הפונקציה בשם הנכון (signUpIndependentChild)
-import { signUpIndependentChild, signIn, signInWithGoogle, signInWithFacebook } from '@/lib/authService';
+import { ArrowRight, User, Lock, Mail, Calendar } from 'lucide-react-native';
+import { supabase } from '@/lib/supabase';
 
-export default function ChildIndependentScreen() {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+export default function ChildIndependentSignup() {
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
 
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-
-  const [firstName, setFirstName] = useState('');
+  // טופס הרשמה
+  const [name, setName] = useState('');
   const [age, setAge] = useState('');
-  const [registerEmail, setRegisterEmail] = useState('');
-  const [registerPassword, setRegisterPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [termsAccepted, setTermsAccepted] = useState(false);
-  const [dataCollectionAccepted, setDataCollectionAccepted] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
-  const handleLogin = async () => {
-    if (!loginEmail.trim() || !loginPassword.trim()) {
-      Alert.alert('שגיאה', 'אנא מלא את כל השדות');
+  const handleSignup = async () => {
+    if (!name || !age || !email || !password) {
+      Alert.alert('חסרים פרטים', 'חמוד/ה, צריך למלא את כל השדות כדי להתחיל!');
       return;
     }
 
     setLoading(true);
     try {
-      // שימוש בפונקציית ההתחברות הכללית החדשה
-      await signIn(loginEmail, loginPassword);
-      router.replace('/(tabs)');
-    } catch (error: any) {
-      Alert.alert('שגיאה', error.message || 'התחברות נכשלה');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRegister = async () => {
-    if (!firstName.trim() || !age.trim() || !registerEmail.trim() || !registerPassword.trim()) {
-      Alert.alert('שגיאה', 'אנא מלא את כל השדות');
-      return;
-    }
-
-    const ageNum = parseInt(age);
-    if (isNaN(ageNum) || ageNum < 1 || ageNum > 17) {
-      Alert.alert('שגיאה', 'גיל לא תקין');
-      return;
-    }
-
-    if (registerPassword !== confirmPassword) {
-      Alert.alert('שגיאה', 'הסיסמאות אינן זהות');
-      return;
-    }
-
-    if (!termsAccepted || !dataCollectionAccepted) {
-      Alert.alert('שגיאה', 'יש לאשר את התנאים וההסכמות');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // יצירת תמונת פרופיל דיפולטיבית (כי המסד נתונים דורש, אבל אין לנו שדה העלאה כרגע)
-      const defaultAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${firstName}`;
-
-      // התיקון: קריאה לפונקציה החדשה עם השדות הנכונים
-      const { error } = await signUpIndependentChild({
-        email: registerEmail,
-        password: registerPassword,
-        name: firstName, // מיפוי firstName ל-name
-        age: age,        // שליחת הגיל כמחרוזת (השירות ימיר אותו)
-        avatarUrl: defaultAvatar
+      // 1. יצירת המשתמש במערכת האימות
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+            age: parseInt(age),
+            user_type: 'child_independent',
+          },
+        },
       });
 
-      if (error) throw error;
+      if (authError) throw authError;
+      if (!authData.user) throw new Error('לא הצלחנו ליצור את המשתמש');
 
-      // אם הכל עבר בשלום
-      router.replace('/auth/child-onboarding');
-      
+      const userId = authData.user.id;
+
+      // 2. יצירת "משפחה" עבור הילד (Family of One)
+      // זה הטריק שמונע באגים: לכל ילד יש משפחה, גם אם הוא לבד כרגע
+      const { data: familyData, error: familyError } = await supabase
+        .from('families')
+        .insert({
+          name: `המסע של ${name}`,
+        })
+        .select()
+        .single();
+
+      if (familyError) throw familyError;
+
+      // 3. יצירת פרופיל הילד
+      const { error: childError } = await supabase
+        .from('children')
+        .insert({
+          id: userId,
+          family_id: familyData.id,
+          name: name,
+          age: parseInt(age),
+          is_independent: true, // דגל חשוב!
+          points: 0,
+          avatar_url: 'default_child_avatar', // אפשר להוסיף בחירת דמות בעתיד
+        });
+
+      if (childError) throw childError;
+
+      // הצלחה! ה-AuthProvider יזהה את השינוי ויעביר אותנו
+      Alert.alert('איזה כיף!', 'החשבון נוצר בהצלחה. בוא נתחיל להתאמן!', [
+        { text: 'קדימה!', onPress: () => {} }
+      ]);
+
     } catch (error: any) {
-      console.error('Registration failed:', error);
-      Alert.alert('שגיאה', error.message || 'הרשמה נכשלה. נסה שוב מאוחר יותר.');
+      console.error('Error signing up independent child:', error);
+      Alert.alert('אופס...', 'משהו השתבש בהרשמה. נסה שוב או בקש עזרה ממבוגר.');
     } finally {
       setLoading(false);
     }
-  };
-
-  // ... שאר הפונקציות (Google/Facebook) נשארות אותו דבר ...
-  const handleGoogleAuth = async () => {
-    /* נשאר ללא שינוי */
-    setLoading(true);
-    try { await signInWithGoogle('child_independent'); } 
-    catch (e: any) { Alert.alert('Error', e.message); setLoading(false); }
-  };
-
-  const handleFacebookAuth = async () => {
-     /* נשאר ללא שינוי */
-     setLoading(true);
-     try { await signInWithFacebook('child_independent'); }
-     catch (e: any) { Alert.alert('Error', e.message); setLoading(false); }
   };
 
   return (
     <View style={styles.container}>
       <LinearGradient
-        colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
-        locations={[0, 0.5, 1]}
-        style={styles.gradient}
+        colors={['#FF9F4F', '#FF6B6B']} // צבעים חמים וכיפיים לילדים
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
       >
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
         >
-          <Text style={styles.title}>
-            {mode === 'login' ? 'התחברות ילד - משתמש עצמאי' : 'הרשמת ילד'}
-          </Text>
-
-          {/* טופס התחברות - ללא שינוי ויזואלי */}
-          {mode === 'login' ? (
-            <View style={styles.form}>
-              <Text style={styles.label}>אימייל</Text>
-              <TextInput
-                style={styles.input}
-                value={loginEmail}
-                onChangeText={setLoginEmail}
-                placeholder="name@example.com"
-                placeholderTextColor="#666"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                editable={!loading}
-              />
-
-              <Text style={styles.label}>סיסמה</Text>
-              <TextInput
-                style={styles.input}
-                value={loginPassword}
-                onChangeText={setLoginPassword}
-                placeholder="הקלד סיסמה"
-                placeholderTextColor="#666"
-                secureTextEntry
-                editable={!loading}
-              />
-
-              <TouchableOpacity
-                style={[styles.mainButton, loading && styles.buttonDisabled]}
-                onPress={handleLogin}
-                disabled={loading}
-              >
-                <Text style={styles.mainButtonText}>
-                  {loading ? 'מתחבר...' : 'התחבר'}
-                </Text>
-              </TouchableOpacity>
-              {/* ... שאר הכפתורים ... */}
-              <TouchableOpacity onPress={() => setMode('register')} disabled={loading} style={{marginTop: 20}}>
-                <Text style={styles.linkText}>אין לך חשבון? צור חשבון חדש</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            /* טופס הרשמה */
-            <View style={styles.form}>
-              <Text style={styles.label}>שם פרטי</Text>
-              <TextInput
-                style={styles.input}
-                value={firstName}
-                onChangeText={setFirstName}
-                placeholder="הקלד שם פרטי"
-                placeholderTextColor="#666"
-                editable={!loading}
-              />
-
-              <Text style={styles.label}>גיל</Text>
-              <TextInput
-                style={styles.input}
-                value={age}
-                onChangeText={setAge}
-                placeholder="הקלד גיל"
-                placeholderTextColor="#666"
-                keyboardType="number-pad"
-                editable={!loading}
-              />
-
-              <Text style={styles.label}>אימייל</Text>
-              <TextInput
-                style={styles.input}
-                value={registerEmail}
-                onChangeText={setRegisterEmail}
-                placeholder="name@example.com"
-                placeholderTextColor="#666"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                editable={!loading}
-              />
-
-              <Text style={styles.label}>סיסמה</Text>
-              <TextInput
-                style={styles.input}
-                value={registerPassword}
-                onChangeText={setRegisterPassword}
-                placeholder="הקלד סיסמה"
-                placeholderTextColor="#666"
-                secureTextEntry
-                editable={!loading}
-              />
-
-              <Text style={styles.label}>אימות סיסמה</Text>
-              <TextInput
-                style={styles.input}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                placeholder="הקלד סיסמה שנית"
-                placeholderTextColor="#666"
-                secureTextEntry
-                editable={!loading}
-              />
-
-              {/* צ'קבוקסים */}
-              <View style={styles.checkboxContainer}>
-                <View style={styles.checkbox}>
-                  <TouchableOpacity
-                    style={[styles.checkboxBox, termsAccepted && styles.checkboxChecked]}
-                    onPress={() => setTermsAccepted(!termsAccepted)}
-                    disabled={loading}
-                  >
-                    {termsAccepted && <Text style={styles.checkmark}>✓</Text>}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => router.push('/consent-policy?type=terms_of_use')}
-                    disabled={loading}
-                    style={styles.checkboxTextContainer}
-                  >
-                    <Text style={styles.checkboxLabel}>אני מסכים לתנאי השימוש</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.checkbox}>
-                  <TouchableOpacity
-                    style={[styles.checkboxBox, dataCollectionAccepted && styles.checkboxChecked]}
-                    onPress={() => setDataCollectionAccepted(!dataCollectionAccepted)}
-                    disabled={loading}
-                  >
-                    {dataCollectionAccepted && <Text style={styles.checkmark}>✓</Text>}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => router.push('/consent-policy?type=data_collection')}
-                    disabled={loading}
-                    style={styles.checkboxTextContainer}
-                  >
-                    <Text style={styles.checkboxLabel}>אני מסכים לאיסוף נתונים למחקר</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.mainButton, loading && styles.buttonDisabled]}
-                onPress={handleRegister}
-                disabled={loading}
-              >
-                <Text style={styles.mainButtonText}>
-                  {loading ? 'נרשם...' : 'צור חשבון'}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={() => setMode('login')} disabled={loading}>
-                <Text style={styles.linkText}>כבר יש לך חשבון? התחבר</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </ScrollView>
+          <ArrowRight color="#FFFFFF" size={28} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>הרשמה לילדים</Text>
+        <Text style={styles.headerSubtitle}>יוצאים לדרך עצמאית! 🚀</Text>
       </LinearGradient>
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.content}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.illustrationContainer}>
+             {/* אפשר להוסיף כאן תמונה של הדמות המקסימה שלך */}
+             <Image 
+                source={require('@/assets/images/icon.png')} 
+                style={styles.characterImage}
+                resizeMode="contain"
+             />
+          </View>
+
+          <View style={styles.formContainer}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>איך קוראים לך?</Text>
+              <View style={styles.inputWrapper}>
+                <User size={20} color="#FF9F4F" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="השם שלך"
+                  value={name}
+                  onChangeText={setName}
+                  textAlign="right"
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>בן/בת כמה את/ה?</Text>
+              <View style={styles.inputWrapper}>
+                <Calendar size={20} color="#FF9F4F" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="גיל"
+                  value={age}
+                  onChangeText={setAge}
+                  keyboardType="numeric"
+                  textAlign="right"
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>האימייל שלך</Text>
+              <View style={styles.inputWrapper}>
+                <Mail size={20} color="#FF9F4F" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="email@example.com"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  textAlign="right"
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>סיסמה סודית</Text>
+              <View style={styles.inputWrapper}>
+                <Lock size={20} color="#FF9F4F" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="******"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                  textAlign="right"
+                />
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleSignup}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.submitButtonText}>צור חשבון והתחל!</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  gradient: { flex: 1 },
-  scrollView: { flex: 1 },
-  scrollContent: { padding: 24, paddingTop: 60 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 32, textAlign: 'center' },
-  form: { width: '100%', maxWidth: 400, alignSelf: 'center' },
-  label: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', marginBottom: 8, textAlign: 'right' },
-  input: { backgroundColor: 'rgba(255, 255, 255, 0.9)', borderRadius: 12, padding: 16, fontSize: 16, color: '#1A1A1A', marginBottom: 16, textAlign: 'right' },
-  mainButton: { backgroundColor: '#1A1A1A', borderRadius: 12, padding: 18, alignItems: 'center', marginTop: 8, marginBottom: 16 },
-  mainButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '600' },
-  buttonDisabled: { opacity: 0.6 },
-  linkText: { fontSize: 16, color: '#1A1A1A', textAlign: 'center', textDecorationLine: 'underline' },
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 16 },
-  line: { flex: 1, height: 1, backgroundColor: 'rgba(26, 26, 26, 0.3)' },
-  dividerText: { fontSize: 14, color: '#1A1A1A', marginHorizontal: 12 },
-  socialButton: { backgroundColor: 'rgba(255, 255, 255, 0.9)', borderRadius: 12, padding: 16, alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: 'rgba(26, 26, 26, 0.2)' },
-  facebookButton: { backgroundColor: 'rgba(66, 103, 178, 0.15)' },
-  socialButtonText: { fontSize: 16, fontWeight: '600', color: '#1A1A1A' },
-  checkboxContainer: { marginVertical: 16 },
-  checkbox: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  checkboxBox: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: '#1A1A1A', backgroundColor: 'rgba(255, 255, 255, 0.9)', justifyContent: 'center', alignItems: 'center', marginLeft: 12 },
-  checkboxChecked: { backgroundColor: '#1A1A1A' },
-  checkmark: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
-  checkboxTextContainer: { flex: 1 },
-  checkboxLabel: { fontSize: 16, color: '#1A1A1A', textAlign: 'right', textDecorationLine: 'underline' },
+  container: {
+    flex: 1,
+    backgroundColor: '#FFF5F0', // רקע בהיר וחמים
+  },
+  header: {
+    paddingTop: 60,
+    paddingBottom: 30,
+    paddingHorizontal: 24,
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+    alignItems: 'center',
+  },
+  backButton: {
+    position: 'absolute',
+    top: 60,
+    right: 24,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 20,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  headerSubtitle: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  content: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 24,
+  },
+  illustrationContainer: {
+    alignItems: 'center',
+    marginTop: -20,
+    marginBottom: 20,
+  },
+  characterImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#FFF',
+    borderWidth: 4,
+    borderColor: '#FFF',
+  },
+  formContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    shadowColor: '#FF9F4F',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+    gap: 20,
+  },
+  inputGroup: {
+    gap: 8,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'right',
+  },
+  inputWrapper: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: '#FFF5F0',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    height: 56,
+    borderWidth: 1,
+    borderColor: '#FFE0CC',
+    gap: 12,
+  },
+  input: {
+    flex: 1,
+    fontSize: 16,
+    color: '#333',
+    textAlign: 'right',
+    height: '100%',
+  },
+  submitButton: {
+    backgroundColor: '#FF6B6B',
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+    shadowColor: '#FF6B6B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  submitButtonText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
 });
