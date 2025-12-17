@@ -1,12 +1,19 @@
 /*
-  MASTER SCHEMA V3 - FINAL & COMPLETE
-  -----------------------------------
-  סה"כ טבלאות: 10
+  MASTER SCHEMA V4 - HYBRID MODEL (Parent, Linked Child, Independent Child)
+  -------------------------------------------------------------------------
+  קוד זה מחליף את כל המבנה הקיים.
+  הוא כולל:
+  1. ניהול משתמשים ומשפחות אוטומטי.
+  2. תוכן (תרגילים ומסלולים).
+  3. מעקב התקדמות.
 */
 
 -- ==========================================
--- 1. ניקוי מלא (מחיקת כל הטבלאות הישנות)
+-- 1. ניקוי מלא (Clean Slate)
 -- ==========================================
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+
 DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS track_day_completions CASCADE;
 DROP TABLE IF EXISTS user_track_progress CASCADE;
@@ -15,49 +22,50 @@ DROP TABLE IF EXISTS track_days CASCADE;
 DROP TABLE IF EXISTS training_tracks CASCADE;
 DROP TABLE IF EXISTS eye_exercises CASCADE;
 DROP TABLE IF EXISTS children CASCADE;
-DROP TABLE IF EXISTS parents CASCADE;
+DROP TABLE IF EXISTS profiles CASCADE;
 DROP TABLE IF EXISTS families CASCADE;
+DROP TABLE IF EXISTS parents CASCADE; -- מחיקת טבלה ישנה אם קיימת
 
 -- ==========================================
--- 2. משתמשים ומשפחה (3 טבלאות)
+-- 2. תשתית משתמשים ומשפחות (User Management)
 -- ==========================================
 
--- 1. משפחה (הבסיס)
+-- 1. משפחות (הקונטיינר הראשי)
 CREATE TABLE families (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name text DEFAULT 'My Family',
+  name text NOT NULL DEFAULT 'My Family',
   created_at timestamptz DEFAULT now()
 );
 
--- 2. הורים
-CREATE TABLE parents (
+-- 2. פרופילים (משתמשי מערכת עם אימייל: הורים וילדים עצמאיים)
+CREATE TABLE profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  family_id uuid REFERENCES families(id) ON DELETE SET NULL,
-  name text NOT NULL,
+  family_id uuid REFERENCES families(id) ON DELETE CASCADE,
   email text NOT NULL,
+  full_name text,
+  role text NOT NULL CHECK (role IN ('parent', 'child_independent')),
   created_at timestamptz DEFAULT now()
 );
 
--- 3. ילדים
+-- 3. ילדים (השחקנים במשחק)
 CREATE TABLE children (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  family_id uuid REFERENCES families(id) ON DELETE CASCADE, -- שייך למשפחה
-  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL, -- אופציונלי (אם הילד עצמאי)
+  family_id uuid REFERENCES families(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL, -- מלא רק אם זה ילד עצמאי
   name text NOT NULL,
-  age integer NOT NULL,
+  age integer DEFAULT 0,
   avatar_url text DEFAULT 'default',
   is_independent boolean DEFAULT false,
+  linking_code text, -- קוד כניסה לילד מקושר (נוצר ע"י ההורה)
   points integer DEFAULT 0,
   daily_streak integer DEFAULT 0,
-  linking_code text,
   created_at timestamptz DEFAULT now()
 );
 
 -- ==========================================
--- 3. תוכן: תרגילים ומסלולים (4 טבלאות)
+-- 3. תוכן: תרגילים ומסלולים
 -- ==========================================
 
--- 4. תרגילים
 CREATE TABLE eye_exercises (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
@@ -70,7 +78,6 @@ CREATE TABLE eye_exercises (
   created_at timestamptz DEFAULT now()
 );
 
--- 5. מסלולים
 CREATE TABLE training_tracks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
@@ -81,7 +88,6 @@ CREATE TABLE training_tracks (
   created_at timestamptz DEFAULT now()
 );
 
--- 6. ימים במסלול
 CREATE TABLE track_days (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   track_id uuid NOT NULL REFERENCES training_tracks(id) ON DELETE CASCADE,
@@ -93,7 +99,6 @@ CREATE TABLE track_days (
   UNIQUE(track_id, day_number)
 );
 
--- 7. שיוך תרגילים לימים
 CREATE TABLE track_day_assignments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   track_day_id uuid NOT NULL REFERENCES track_days(id) ON DELETE CASCADE,
@@ -104,10 +109,9 @@ CREATE TABLE track_day_assignments (
 );
 
 -- ==========================================
--- 4. התקדמות והתראות (3 טבלאות)
+-- 4. התקדמות והתראות
 -- ==========================================
 
--- 8. מעקב התקדמות (איפה הילד עומד?)
 CREATE TABLE user_track_progress (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   child_id uuid NOT NULL REFERENCES children(id) ON DELETE CASCADE,
@@ -118,7 +122,6 @@ CREATE TABLE user_track_progress (
   UNIQUE(child_id, track_id)
 );
 
--- 9. היסטוריית ביצועים (לוגים)
 CREATE TABLE track_day_completions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   child_id uuid NOT NULL REFERENCES children(id) ON DELETE CASCADE,
@@ -127,7 +130,6 @@ CREATE TABLE track_day_completions (
   duration_spent integer DEFAULT 0
 );
 
--- 10. התראות
 CREATE TABLE notifications (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -138,38 +140,119 @@ CREATE TABLE notifications (
 );
 
 -- ==========================================
--- 5. אבטחה (RLS Policies)
+-- 5. אוטומציה (The Magic Triggers)
+-- ==========================================
+
+-- פונקציה שמטפלת בהרשמה חדשה (הורה או ילד עצמאי)
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+DECLARE
+  new_family_id uuid;
+  user_role text;
+  user_name text;
+BEGIN
+  -- קבלת נתונים מה-Metadata שנשלח מהאפליקציה
+  user_role := new.raw_user_meta_data->>'role';
+  user_name := new.raw_user_meta_data->>'name';
+  
+  -- אם אין שם, ברירת מחדל
+  IF user_name IS NULL THEN user_name := 'User'; END IF;
+
+  -- 1. יצירת משפחה חדשה (תמיד נוצרת למשתמש חדש שנרשם במייל)
+  INSERT INTO public.families (name)
+  VALUES ('משפחת ' || user_name)
+  RETURNING id INTO new_family_id;
+
+  -- 2. יצירת פרופיל משתמש
+  INSERT INTO public.profiles (id, family_id, email, full_name, role)
+  VALUES (new.id, new_family_id, new.email, user_name, user_role);
+
+  -- 3. טיפול מיוחד לילד עצמאי: יצירה אוטומטית גם בטבלת הילדים
+  IF user_role = 'child_independent' THEN
+    INSERT INTO public.children (
+      family_id,
+      user_id,
+      name,
+      age,
+      is_independent,
+      avatar_url
+    ) VALUES (
+      new_family_id,
+      new.id,
+      user_name,
+      COALESCE((new.raw_user_meta_data->>'age')::int, 8), -- ברירת מחדל גיל 8
+      true,
+      COALESCE(new.raw_user_meta_data->>'avatarUrl', 'default')
+    );
+  END IF;
+
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- הפעלת הטריגר
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+-- ==========================================
+-- 6. אבטחה (Row Level Security)
 -- ==========================================
 
 ALTER TABLE families ENABLE ROW LEVEL SECURITY;
-ALTER TABLE parents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE children ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_track_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE track_day_completions ENABLE ROW LEVEL SECURITY;
+-- תוכן הוא קריאה לכולם
 ALTER TABLE eye_exercises ENABLE ROW LEVEL SECURITY;
 ALTER TABLE training_tracks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE track_days ENABLE ROW LEVEL SECURITY;
 ALTER TABLE track_day_assignments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_track_progress ENABLE ROW LEVEL SECURITY;
-ALTER TABLE track_day_completions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
--- הרשאות גישה למשתמשים מחוברים
-CREATE POLICY "Auth users full access families" ON families FOR ALL TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "Auth users full access parents" ON parents FOR ALL TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "Auth users full access children" ON children FOR ALL TO authenticated USING (true) WITH CHECK (true);
+-- מדיניות (Policies)
 
--- קריאת תוכן
+-- פרופילים: אדם רואה רק את הפרופיל של עצמו
+CREATE POLICY "Users view own profile" ON profiles 
+  FOR SELECT USING (auth.uid() = id);
+
+-- משפחות: אדם רואה את המשפחה שהוא שייך אליה
+CREATE POLICY "Users view own family" ON families 
+  FOR SELECT USING (
+    id IN (SELECT family_id FROM profiles WHERE id = auth.uid())
+  );
+
+-- ילדים:
+-- 1. הורה רואה את הילדים במשפחה שלו
+-- 2. ילד עצמאי רואה את עצמו
+CREATE POLICY "Parents view family children" ON children
+  FOR ALL USING (
+    family_id IN (SELECT family_id FROM profiles WHERE id = auth.uid() AND role = 'parent')
+  );
+
+CREATE POLICY "Independent child views self" ON children
+  FOR ALL USING (
+    user_id = auth.uid()
+  );
+
+-- תוכן: קריאה לכולם (מחוברים)
 CREATE POLICY "Read exercises" ON eye_exercises FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Read tracks" ON training_tracks FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Read track days" ON track_days FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Read assignments" ON track_day_assignments FOR SELECT TO authenticated USING (true);
 
--- ניהול התקדמות
-CREATE POLICY "Manage progress" ON user_track_progress FOR ALL TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "Manage completions" ON track_day_completions FOR ALL TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "Manage notifications" ON notifications FOR ALL TO authenticated USING (auth.uid() = user_id);
+-- התקדמות: לפי הרשאות הילד
+CREATE POLICY "Manage progress" ON user_track_progress 
+  FOR ALL USING (
+    child_id IN (
+      SELECT id FROM children WHERE 
+        (user_id = auth.uid()) OR -- הילד עצמו
+        (family_id IN (SELECT family_id FROM profiles WHERE id = auth.uid() AND role = 'parent')) -- ההורה
+    )
+  );
 
 -- ==========================================
--- 6. נתונים ראשוניים (Seed Data)
+-- 7. נתונים ראשוניים (Seed Data)
 -- ==========================================
 
 INSERT INTO eye_exercises (name, description, category, color, icon) VALUES
