@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-// --- פונקציות עזר ---
+// --- Helper Functions ---
 
 function generateLinkingCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -11,44 +11,36 @@ function generateLinkingCode(): string {
   return result;
 }
 
-// --- פונקציות אימות והרשמה ---
+// --- Auth & Registration Logic ---
 
-// 1. הרשמת הורה (הגרסה המתוקנת והמלאה)
+// 1. Parent Registration Logic
 export async function signUpParent(email: string, password: string, fullName: string) {
   try {
-    // א. יצירת המשתמש במערכת האימות (Auth)
+    // A. Create Auth User
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: {
-          name: fullName, // שימוש ב-name כדי להיות עקבי
-          role: 'parent'
-        }
-      }
+      options: { data: { name: fullName, role: 'parent' } }
     });
 
     if (authError) throw authError;
-    if (!authData.user) throw new Error('No user data returned');
+    if (!authData.user) throw new Error('No user data returned from Auth');
 
-    // ב. יצירת משפחה חדשה (קודם כל המשפחה!)
-    // אנחנו יוצרים שורה בטבלת families ומקבלים חזרה את ה-ID שלה
+    // B. Create Family (The container)
     const { data: familyData, error: familyError } = await supabase
       .from('families')
-      .insert({
-        name: `משפחת ${fullName}`
-      })
+      .insert({ name: `משפחת ${fullName}` })
       .select()
       .single();
 
     if (familyError) throw familyError;
 
-    // ג. יצירת פרופיל הורה (שמצביע על המשפחה שנוצרה)
+    // C. Create Parent Profile (Linked to Family)
     const { error: parentError } = await supabase
       .from('parents')
       .insert({
-        id: authData.user.id,     // אותו ID כמו ב-Auth
-        family_id: familyData.id, // הקישור למשפחה שיצרנו הרגע
+        id: authData.user.id,
+        family_id: familyData.id,
         name: fullName,
         email: email
       });
@@ -57,12 +49,12 @@ export async function signUpParent(email: string, password: string, fullName: st
 
     return { user: authData.user, error: null };
   } catch (error) {
-    console.error('Parent signup error:', error);
+    console.error('Parent signup logic failed:', error);
     return { user: null, error };
   }
 }
 
-// 2. הרשמת ילד עצמאי
+// 2. Independent Child Registration Logic
 export async function signUpIndependentChild(data: {
   email: string;
   password: string;
@@ -71,6 +63,7 @@ export async function signUpIndependentChild(data: {
   avatarUrl: string;
 }) {
   try {
+    // A. Create Auth User
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: data.email,
       password: data.password,
@@ -80,6 +73,8 @@ export async function signUpIndependentChild(data: {
     if (authError) throw authError;
     if (!authData.user) throw new Error('No user data returned');
 
+    // B. Create Child Profile
+    // NOTE: We only send fields that exist in the 'children' table schema
     const { error: profileError } = await supabase
       .from('children')
       .insert({
@@ -91,18 +86,19 @@ export async function signUpIndependentChild(data: {
         is_independent: true,
         points: 0,
         daily_streak: 0
+        // family_id is NULL for independent child initially
       });
 
     if (profileError) throw profileError;
 
     return { user: authData.user, error: null };
   } catch (error) {
-    console.error('Independent child signup error:', error);
+    console.error('Independent child signup failed:', error);
     return { user: null, error };
   }
 }
 
-// 3. התחברות כללית
+// 3. General Sign In
 export async function signIn(email: string, password: string) {
   try {
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -117,7 +113,7 @@ export async function signIn(email: string, password: string) {
   }
 }
 
-// 4. התנתקות
+// 4. Sign Out
 export async function signOut() {
   const { error } = await supabase.auth.signOut();
   if (error) console.error('Sign out error:', error);
