@@ -59,20 +59,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const fetchProfile = async (userId: string) => {
     try {
       // שלב 1: בדיקה בטבלת הורים (parents)
+      // מותאם לסקריפט ה-SQL החדש
       const { data: parent } = await supabase
         .from('parents')
-        .select('id, name, family_id, avatar_url')
+        .select('id, name, family_id, email')
         .eq('id', userId)
         .single();
 
       if (parent) {
         setProfile({
           id: userId,
-          email: session?.user.email,
+          email: parent.email || session?.user.email,
           name: parent.name,
           role: 'parent',
           familyId: parent.family_id,
-          avatarUrl: parent.avatar_url,
+          avatarUrl: undefined, // להורים אין כרגע אווטאר בטבלה החדשה
         });
         setLoading(false);
         return;
@@ -82,7 +83,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data: child } = await supabase
         .from('children')
         .select('id, name, family_id, avatar_url, points, is_independent')
-        .eq('id', userId)
+        .eq('id', userId) 
+        // הערה: במקרה של הרשמה, ה-ID הוא זהה. במקרה של קישור, ייתכן שוני אבל כרגע זה מכסה את הרוב.
         .single();
 
       if (child) {
@@ -100,6 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
     } catch (error) {
       console.error('Error fetching profile:', error);
+      // במקרה של שגיאה (למשל המשתמש נוצר ב-Auth אבל עדיין לא בטבלה), נשאיר את הפרופיל ריק
+      // זה מאפשר ל-refreshProfile להיקרא שוב בהמשך ולמלא אותו
     } finally {
       setLoading(false);
     }
@@ -117,7 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile, 
       loading, 
       isAdmin: profile?.role === 'parent', 
-      refreshProfile: () => session && fetchProfile(session.user.id), 
+      refreshProfile: () => session ? fetchProfile(session.user.id) : Promise.resolve(), 
       signOut 
     }}>
       {children}
