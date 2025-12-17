@@ -1,4 +1,4 @@
-import { HEBREW_TRANSLATIONS, TranslationKey } from '../constants/translations';
+import { HEBREW_TRANSLATIONS, TranslationKey } from '../app/constants/translations';
 
 export function useTexts() {
   /**
