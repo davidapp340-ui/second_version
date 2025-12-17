@@ -6,509 +6,296 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Check, Copy, Square, CheckSquare } from 'lucide-react-native';
-import { useScreenTexts } from '@/hooks/useTexts';
-import { getCurrentUser } from '@/lib/authService';
-import { getFamily, addChild, type Child } from '@/lib/familyService';
+import { LinearGradient } from 'expo-linear-gradient';
+import { ArrowRight, User, Lock, Calendar, AtSign } from 'lucide-react-native';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function AddChildScreen() {
   const router = useRouter();
-  const { getText, loading: textsLoading } = useScreenTexts('add_child');
-  const consentTexts = useScreenTexts('consent');
-
-  const [step, setStep] = useState<'form' | 'consent' | 'code'>('form');
+  const { profile, isAdmin } = useAuth(); // שימוש ב-Hook המרכזי
   const [loading, setLoading] = useState(false);
+
+  // טופס
   const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [age, setAge] = useState('');
-  const [error, setError] = useState('');
-  const [child, setChild] = useState<Child | null>(null);
-  const [codeCopied, setCodeCopied] = useState(false);
 
-  const [dataCollectionConsent, setDataCollectionConsent] = useState(false);
-  const [termsOfUseConsent, setTermsOfUseConsent] = useState(false);
-
-  const handleContinueToConsent = () => {
-    if (!name.trim()) {
-      setError('נא להזין שם');
+  const handleCreateChild = async () => {
+    // 1. בדיקות מקדימות
+    if (!isAdmin || !profile?.familyId) {
+      Alert.alert('שגיאה', 'אין לך הרשאה לבצע פעולה זו או שחסר שיוך משפחתי.');
       return;
     }
 
-    const ageNum = parseInt(age);
-    if (!ageNum || ageNum < 1 || ageNum > 17) {
-      setError('נא להזין גיל בין 1 ל-17');
-      return;
-    }
-
-    setError('');
-    setStep('consent');
-  };
-
-  const handleSubmit = async () => {
-    if (!dataCollectionConsent || !termsOfUseConsent) {
-      setError(consentTexts.getText('consent.must_agree', 'יש לאשר את שתי ההסכמות כדי להמשיך'));
+    if (!name || !username || !password || !age) {
+      Alert.alert('חסרים פרטים', 'נא למלא את כל השדות');
       return;
     }
 
     setLoading(true);
-    setError('');
-
     try {
-      const user = await getCurrentUser();
-      if (!user) {
-        router.replace('/auth/parent-login');
-        return;
-      }
-
-      const family = await getFamily(user.id);
-      if (!family) {
-        setError('לא נמצאה משפחה. נא להתחבר מחדש.');
-        return;
-      }
-
-      const newChild = await addChild(family.id, {
-        name: name.trim(),
-        age: parseInt(age),
+      // 2. קריאה לפונקציית שרת (Edge Function)
+      // הפונקציה הזו יוצרת את המשתמש מבלי לנתק את ההורה
+      const { data, error } = await supabase.functions.invoke('create-child-account', {
+        body: {
+          email: `${username}@davidapp.local`, // יצירת אימייל פיקטיבי לזיהוי
+          password: password,
+          name: name,
+          age: parseInt(age),
+          family_id: profile.familyId, // הקישור הקריטי למשפחה
+        },
       });
 
-      setChild(newChild);
-      setStep('code');
-    } catch (err: any) {
-      setError(err.message || 'שגיאה בהוספת ילד');
+      if (error) {
+        console.error('Edge Function Error:', error);
+        throw new Error(error.message || 'שגיאה ביצירת המשתמש בשרת');
+      }
+
+      // אם הפונקציה החזירה שגיאה פנימית
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+
+      Alert.alert('מצוין!', `החשבון של ${name} נוצר בהצלחה.`, [
+        { text: 'חזור לדף הבית', onPress: () => router.back() }
+      ]);
+
+    } catch (error: any) {
+      console.error('Create child error:', error);
+      // fallback: הודעה ידידותית במקרה של סביבת פיתוח ללא פונקציות ענן
+      if (error.message.includes('Functions') || error.message.includes('fetch')) {
+         Alert.alert('שים לב', 'נראה שסביבת הפיתוח לא מחוברת לפונקציות הענן (Edge Functions). בשרת אמיתי זה יעבוד.');
+      } else {
+         Alert.alert('שגיאה', 'לא הצלחנו ליצור את החשבון. נסה שם משתמש אחר.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleViewPolicy = (policyType: 'data_collection' | 'terms_of_use') => {
-    router.push(`/consent-policy?type=${policyType}`);
-  };
-
-  const handleCopyCode = async () => {
-    if (child) {
-      setCodeCopied(true);
-      setTimeout(() => setCodeCopied(false), 2000);
-    }
-  };
-
-  const handleDone = () => {
-    router.back();
-  };
-
-  if (textsLoading || consentTexts.loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4FFFB0" />
-      </View>
-    );
-  }
-
-  if (step === 'code' && child) {
-    return (
-      <View style={styles.container}>
-        <LinearGradient
-          colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
-          locations={[0, 0.5, 1]}
-          style={styles.gradient}
+  return (
+    <View style={styles.container}>
+      <LinearGradient
+        colors={['#4FFFB0', '#B4FF39']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
         >
-          <View style={styles.content}>
-            <Check size={80} color="#1A1A1A" strokeWidth={3} />
+          <ArrowRight color="#1A1A1A" size={24} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>הוספת ילד</Text>
+        <Text style={styles.headerSubtitle}>צרף בן משפחה חדש למסע</Text>
+      </LinearGradient>
 
-            <Text style={styles.title}>
-              {getText('add_child.code_title', 'קוד החיבור נוצר!')}
-            </Text>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.content}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.formContainer}>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>שם הילד/ה</Text>
+              <View style={styles.inputWrapper}>
+                <User size={20} color="#666" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="למשל: דניאל"
+                  value={name}
+                  onChangeText={setName}
+                  textAlign="right"
+                />
+              </View>
+            </View>
 
-            <Text style={styles.instruction}>
-              {getText('add_child.code_instruction', 'הזן את הקוד הזה במכשיר הילד כדי לחבר אותו לחשבון')}
-            </Text>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>גיל</Text>
+              <View style={styles.inputWrapper}>
+                <Calendar size={20} color="#666" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="גיל"
+                  value={age}
+                  onChangeText={setAge}
+                  keyboardType="numeric"
+                  textAlign="right"
+                />
+              </View>
+            </View>
 
-            <View style={styles.codeContainer}>
-              <Text style={styles.codeLabel}>
-                {getText('add_child.code_label', 'קוד חיבור:')}
-              </Text>
-              <View style={styles.codeBox}>
-                <Text style={styles.code}>{child.linking_code}</Text>
-                <TouchableOpacity
-                  style={styles.copyButton}
-                  onPress={handleCopyCode}
-                  activeOpacity={0.7}
-                >
-                  {codeCopied ? (
-                    <Check size={24} color="#4FFFB0" />
-                  ) : (
-                    <Copy size={24} color="#1A1A1A" />
-                  )}
-                </TouchableOpacity>
+            <View style={styles.divider} />
+            <Text style={styles.sectionTitle}>פרטי התחברות לילד</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>שם משתמש (באנגלית)</Text>
+              <View style={styles.inputWrapper}>
+                <AtSign size={20} color="#666" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="daniel123"
+                  value={username}
+                  onChangeText={(text) => setUsername(text.toLowerCase().replace(/[^a-z0-9]/g, ''))}
+                  autoCapitalize="none"
+                  textAlign="right"
+                />
+              </View>
+              <Text style={styles.helperText}>זה השם שהילד יקליד בכניסה לאפליקציה</Text>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>סיסמה</Text>
+              <View style={styles.inputWrapper}>
+                <Lock size={20} color="#666" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="סיסמה פשוטה (למשל: 123456)"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                  textAlign="right"
+                />
               </View>
             </View>
 
             <TouchableOpacity
-              style={styles.doneButton}
-              onPress={handleDone}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.doneButtonText}>
-                {getText('add_child.done_button', 'סיימתי')}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
-      </View>
-    );
-  }
-
-  if (step === 'consent') {
-    return (
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <LinearGradient
-          colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
-          locations={[0, 0.5, 1]}
-          style={styles.gradient}
-        >
-          <ScrollView
-            style={styles.scrollContainer}
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Text style={styles.title}>
-              {getText('add_child.title', 'הוסף ילד חדש')}
-            </Text>
-
-            <Text style={styles.consentSectionTitle}>
-              הסכמות נדרשות
-            </Text>
-
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            <View style={styles.consentContainer}>
-              <TouchableOpacity
-                style={styles.consentItem}
-                onPress={() => setDataCollectionConsent(!dataCollectionConsent)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.consentCheckbox}>
-                  {dataCollectionConsent ? (
-                    <CheckSquare size={28} color="#1A1A1A" strokeWidth={2.5} />
-                  ) : (
-                    <Square size={28} color="#1A1A1A" strokeWidth={2.5} />
-                  )}
-                </View>
-                <View style={styles.consentTextContainer}>
-                  <Text style={styles.consentText}>
-                    {consentTexts.getText(
-                      'consent.data_collection.checkbox',
-                      'אני מסכים/ה לאיסוף נתונים על הילד'
-                    )}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => handleViewPolicy('data_collection')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.viewPolicyLink}>
-                      {consentTexts.getText('consent.view_policy', 'לחץ לקריאה מלאה')}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.consentItem}
-                onPress={() => setTermsOfUseConsent(!termsOfUseConsent)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.consentCheckbox}>
-                  {termsOfUseConsent ? (
-                    <CheckSquare size={28} color="#1A1A1A" strokeWidth={2.5} />
-                  ) : (
-                    <Square size={28} color="#1A1A1A" strokeWidth={2.5} />
-                  )}
-                </View>
-                <View style={styles.consentTextContainer}>
-                  <Text style={styles.consentText}>
-                    {consentTexts.getText(
-                      'consent.terms_of_use.checkbox',
-                      'אני מאשר/ת את תנאי השימוש'
-                    )}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => handleViewPolicy('terms_of_use')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.viewPolicyLink}>
-                      {consentTexts.getText('consent.view_policy', 'לחץ לקריאה מלאה')}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.submitButton,
-                (!dataCollectionConsent || !termsOfUseConsent) && styles.submitButtonDisabled,
-              ]}
-              onPress={handleSubmit}
-              disabled={loading || !dataCollectionConsent || !termsOfUseConsent}
-              activeOpacity={0.8}
+              style={styles.submitButton}
+              onPress={handleCreateChild}
+              disabled={loading}
             >
               {loading ? (
                 <ActivityIndicator color="#1A1A1A" />
               ) : (
-                <Text style={styles.submitButtonText}>
-                  {getText('add_child.submit_button', 'צור קוד חיבור')}
-                </Text>
+                <Text style={styles.submitButtonText}>צור פרופיל לילד</Text>
               )}
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={() => setStep('form')}
-            >
-              <Text style={styles.cancelButtonText}>חזור</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </LinearGradient>
-      </KeyboardAvoidingView>
-    );
-  }
-
-  return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <LinearGradient
-        colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
-        locations={[0, 0.5, 1]}
-        style={styles.gradient}
-      >
-        <View style={styles.content}>
-          <Text style={styles.title}>
-            {getText('add_child.title', 'הוסף ילד חדש')}
-          </Text>
-
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-          <View style={styles.form}>
-            <TextInput
-              style={styles.input}
-              placeholder={getText('add_child.name_placeholder', 'שם הילד')}
-              value={name}
-              onChangeText={setName}
-              autoCapitalize="words"
-              placeholderTextColor="#666"
-              textAlign="right"
-            />
-
-            <TextInput
-              style={styles.input}
-              placeholder={getText('add_child.age_placeholder', 'גיל')}
-              value={age}
-              onChangeText={setAge}
-              keyboardType="number-pad"
-              maxLength={2}
-              placeholderTextColor="#666"
-              textAlign="right"
-            />
-
-            <TouchableOpacity
-              style={styles.submitButton}
-              onPress={handleContinueToConsent}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.submitButtonText}>המשך</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={() => router.back()}
-            >
-              <Text style={styles.cancelButtonText}>ביטול</Text>
-            </TouchableOpacity>
           </View>
-        </View>
-      </LinearGradient>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#F5F5F5',
   },
-  loadingContainer: {
-    flex: 1,
+  header: {
+    paddingTop: 60,
+    paddingBottom: 30,
+    paddingHorizontal: 24,
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 20,
+    marginBottom: 10,
+    alignSelf: 'flex-end',
   },
-  gradient: {
-    flex: 1,
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#1A1A1A',
+    textAlign: 'right',
   },
-  scrollContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: 20,
-    gap: 24,
+  headerSubtitle: {
+    fontSize: 16,
+    color: 'rgba(26, 26, 26, 0.8)',
+    textAlign: 'right',
   },
   content: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    gap: 24,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
-    textAlign: 'center',
+  scrollContent: {
+    padding: 24,
   },
-  consentSectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  instruction: {
-    fontSize: 16,
-    color: '#1A1A1A',
-    textAlign: 'center',
-    lineHeight: 24,
-    maxWidth: 300,
-  },
-  errorText: {
-    color: '#DC2626',
-    fontSize: 14,
-    textAlign: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    padding: 12,
-    borderRadius: 8,
-    width: '100%',
-    maxWidth: 400,
-  },
-  form: {
-    width: '100%',
-    maxWidth: 400,
+  formContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 4,
     gap: 16,
   },
-  input: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    color: '#1A1A1A',
-  },
-  consentContainer: {
-    width: '100%',
-    maxWidth: 400,
-    gap: 20,
-  },
-  consentItem: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12,
-    padding: 16,
-    gap: 12,
-    alignItems: 'flex-start',
-  },
-  consentCheckbox: {
-    marginTop: 2,
-  },
-  consentTextContainer: {
-    flex: 1,
+  inputGroup: {
     gap: 8,
   },
-  consentText: {
-    fontSize: 15,
-    color: '#1A1A1A',
-    textAlign: 'right',
-    lineHeight: 22,
-  },
-  viewPolicyLink: {
+  label: {
     fontSize: 14,
-    color: '#0066CC',
+    fontWeight: '600',
+    color: '#333',
     textAlign: 'right',
-    textDecorationLine: 'underline',
   },
-  submitButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12,
-    padding: 16,
+  inputWrapper: {
+    flexDirection: 'row-reverse',
     alignItems: 'center',
-    marginTop: 8,
-    width: '100%',
-    maxWidth: 400,
-    alignSelf: 'center',
+    backgroundColor: '#F9F9F9',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    height: 56,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
+    gap: 12,
   },
-  submitButtonDisabled: {
-    opacity: 0.5,
-  },
-  submitButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
-  },
-  cancelButton: {
-    padding: 12,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
+  input: {
+    flex: 1,
     fontSize: 16,
     color: '#1A1A1A',
-    fontWeight: '600',
+    textAlign: 'right',
+    height: '100%',
   },
-  codeContainer: {
-    width: '100%',
-    maxWidth: 400,
-    gap: 12,
+  helperText: {
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'right',
+    marginRight: 4,
   },
-  codeLabel: {
+  divider: {
+    height: 1,
+    backgroundColor: '#EEE',
+    marginVertical: 8,
+  },
+  sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#1A1A1A',
-    textAlign: 'center',
+    textAlign: 'right',
+    marginTop: 8,
   },
-  codeBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+  submitButton: {
+    backgroundColor: '#4FFFB0',
+    height: 56,
     borderRadius: 16,
-    padding: 20,
-    gap: 12,
-  },
-  code: {
-    flex: 1,
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
-    textAlign: 'center',
-    letterSpacing: 4,
-  },
-  copyButton: {
-    padding: 8,
-  },
-  doneButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12,
-    padding: 16,
-    width: '100%',
-    maxWidth: 400,
+    justifyContent: 'center',
     alignItems: 'center',
     marginTop: 16,
+    shadowColor: '#4FFFB0',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
   },
-  doneButtonText: {
+  submitButtonText: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#1A1A1A',
