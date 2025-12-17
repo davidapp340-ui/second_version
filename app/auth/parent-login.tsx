@@ -15,18 +15,18 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowRight, Mail, Lock, User } from 'lucide-react-native';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/hooks/useAuth'; // 1. ייבוא ה-Hook
 
 export default function ParentLoginScreen() {
   const router = useRouter();
-  const [isSignUp, setIsSignUp] = useState(false); // מצב: הרשמה או התחברות
+  const { refreshProfile } = useAuth(); // 2. שליפת פונקציית הרענון
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  // טופס
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
 
-  // פונקציית התחברות (פשוטה)
   const handleSignIn = async () => {
     if (!email || !password) {
       Alert.alert('שגיאה', 'נא למלא אימייל וסיסמה');
@@ -41,8 +41,7 @@ export default function ParentLoginScreen() {
       });
 
       if (error) throw error;
-      
-      // ה-AuthContext ב-_layout.tsx יזהה את השינוי ויעביר אותנו אוטומטית
+      // ה-AuthContext יזהה את השינוי אוטומטית בהתחברות רגילה
     } catch (error: any) {
       Alert.alert('שגיאה בהתחברות', error.message || 'אנא בדוק את הפרטים ונסה שוב');
     } finally {
@@ -50,7 +49,6 @@ export default function ParentLoginScreen() {
     }
   };
 
-  // פונקציית הרשמה (השרשרת המלאה)
   const handleSignUp = async () => {
     if (!email || !password || !fullName) {
       Alert.alert('שגיאה', 'נא למלא את כל השדות');
@@ -59,14 +57,14 @@ export default function ParentLoginScreen() {
 
     setLoading(true);
     try {
-      // 1. יצירת משתמש במערכת האימות
+      // 1. יצירת משתמש Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             full_name: fullName,
-            user_type: 'parent', // סימון ראשוני
+            user_type: 'parent',
           },
         },
       });
@@ -76,24 +74,22 @@ export default function ParentLoginScreen() {
 
       const userId = authData.user.id;
 
-      // 2. יצירת משפחה חדשה
-      // אנחנו יוצרים משפחה לפני ההורה כי ההורה צריך להצביע על משפחה (family_id)
+      // 2. יצירת משפחה
       const { data: familyData, error: familyError } = await supabase
         .from('families')
         .insert({
-          name: `משפחת ${fullName}`, // שם ברירת מחדל
+          name: `משפחת ${fullName}`,
         })
         .select()
         .single();
 
       if (familyError) throw familyError;
-      if (!familyData) throw new Error('שגיאה ביצירת משפחה');
 
-      // 3. יצירת פרופיל הורה שמקושר למשתמש ולמשפחה
+      // 3. יצירת פרופיל הורה
       const { error: parentError } = await supabase
         .from('parents')
         .insert({
-          id: userId,            // ה-ID הזהה ל-Auth
+          id: userId,
           family_id: familyData.id,
           name: fullName,
           email: email,
@@ -101,8 +97,13 @@ export default function ParentLoginScreen() {
 
       if (parentError) throw parentError;
 
+      // 4. שלב קריטי: רענון הפרופיל והמתנה
+      // זה מבטיח שהאפליקציה תדע שהמשתמש החדש הוא "הורה" ותכניס אותו פנימה
+      await new Promise(resolve => setTimeout(resolve, 500)); // המתנה קטנה למסד הנתונים
+      await refreshProfile();
+
       Alert.alert('הצלחה', 'החשבון נוצר בהצלחה!', [
-        { text: 'מעולה', onPress: () => {} } // המעבר יקרה אוטומטית בזכות ה-Hook
+        { text: 'מעולה', onPress: () => router.replace('/(tabs)') }
       ]);
 
     } catch (error: any) {
@@ -141,8 +142,6 @@ export default function ParentLoginScreen() {
       >
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.formContainer}>
-            
-            {/* שדה שם מלא - מופיע רק בהרשמה */}
             {isSignUp && (
               <View style={styles.inputContainer}>
                 <User size={20} color="#666" style={styles.inputIcon} />
@@ -215,102 +214,19 @@ export default function ParentLoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  header: {
-    paddingTop: 60,
-    paddingBottom: 40,
-    paddingHorizontal: 24,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 20,
-    marginBottom: 20,
-    alignSelf: 'flex-end',
-  },
-  headerTitle: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
-    textAlign: 'right',
-    marginBottom: 8,
-  },
-  headerSubtitle: {
-    fontSize: 18,
-    color: 'rgba(26, 26, 26, 0.8)',
-    textAlign: 'right',
-  },
-  content: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    padding: 24,
-  },
-  formContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    elevation: 4,
-    gap: 16,
-  },
-  inputContainer: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    height: 56,
-    borderWidth: 1,
-    borderColor: '#EFEFEF',
-  },
-  inputIcon: {
-    marginLeft: 12,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1A1A1A',
-    textAlign: 'right',
-    height: '100%',
-  },
-  actionButton: {
-    backgroundColor: '#4FFFB0',
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 8,
-    shadowColor: '#4FFFB0',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  actionButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
-  },
-  toggleButton: {
-    padding: 16,
-    alignItems: 'center',
-  },
-  toggleButtonText: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
-  },
+  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  header: { paddingTop: 60, paddingBottom: 40, paddingHorizontal: 24, borderBottomLeftRadius: 30, borderBottomRightRadius: 30 },
+  backButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20, marginBottom: 20, alignSelf: 'flex-end' },
+  headerTitle: { fontSize: 32, fontWeight: 'bold', color: '#1A1A1A', textAlign: 'right', marginBottom: 8 },
+  headerSubtitle: { fontSize: 18, color: 'rgba(26, 26, 26, 0.8)', textAlign: 'right' },
+  content: { flex: 1 },
+  scrollContent: { flexGrow: 1, padding: 24 },
+  formContainer: { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 4, gap: 16 },
+  inputContainer: { flexDirection: 'row-reverse', alignItems: 'center', backgroundColor: '#F9F9F9', borderRadius: 16, paddingHorizontal: 16, height: 56, borderWidth: 1, borderColor: '#EFEFEF' },
+  inputIcon: { marginLeft: 12 },
+  input: { flex: 1, fontSize: 16, color: '#1A1A1A', textAlign: 'right', height: '100%' },
+  actionButton: { backgroundColor: '#4FFFB0', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 8, shadowColor: '#4FFFB0', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
+  actionButtonText: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A' },
+  toggleButton: { padding: 16, alignItems: 'center' },
+  toggleButtonText: { fontSize: 14, color: '#666', fontWeight: '500' },
 });
