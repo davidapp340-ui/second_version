@@ -14,13 +14,13 @@ import {
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowRight, Mail, Lock, User } from 'lucide-react-native';
-import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/hooks/useAuth'; // 1. ייבוא ה-Hook החדש
+import { useAuth } from '@/hooks/useAuth';
+import { signUpParent, signIn } from '@/lib/authService'; // ייבוא הפונקציות המסודרות
 
 export default function ParentLoginScreen() {
   const router = useRouter();
-  const { refreshProfile } = useAuth(); // 2. שליפת פונקציית הרענון
-  const [isSignUp, setIsSignUp] = useState(false); // מצב: הרשמה או התחברות
+  const { refreshProfile } = useAuth();
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   
   // טופס
@@ -28,7 +28,7 @@ export default function ParentLoginScreen() {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
 
-  // פונקציית התחברות (פשוטה)
+  // טיפול בהתחברות
   const handleSignIn = async () => {
     if (!email || !password) {
       Alert.alert('שגיאה', 'נא למלא אימייל וסיסמה');
@@ -36,23 +36,18 @@ export default function ParentLoginScreen() {
     }
 
     setLoading(true);
-    try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    const { error } = await signIn(email, password);
+    setLoading(false);
 
-      if (error) throw error;
-      
-      // ה-AuthContext ב-_layout.tsx יזהה את השינוי ויעביר אותנו אוטומטית
-    } catch (error: any) {
-      Alert.alert('שגיאה בהתחברות', error.message || 'אנא בדוק את הפרטים ונסה שוב');
-    } finally {
-      setLoading(false);
+    if (error) {
+      Alert.alert('שגיאה בהתחברות', 'אנא בדוק את הפרטים ונסה שוב');
+    } else {
+      // ה-AuthContext יזהה את השינוי אוטומטית, אבל ליתר ביטחון נרענן
+      await refreshProfile();
     }
   };
 
-  // פונקציית הרשמה (הלוגיקה המתוקנת)
+  // טיפול בהרשמה - עכשיו משתמש בפונקציה האחידה!
   const handleSignUp = async () => {
     if (!email || !password || !fullName) {
       Alert.alert('שגיאה', 'נא למלא את כל השדות');
@@ -60,63 +55,23 @@ export default function ParentLoginScreen() {
     }
 
     setLoading(true);
-    try {
-      // 1. יצירת משתמש במערכת האימות (Auth)
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-            user_type: 'parent',
-          },
-        },
-      });
-
-      if (authError) throw authError;
-      if (!authData.user) throw new Error('לא נוצר משתמש');
-
-      const userId = authData.user.id;
-
-      // 2. יצירת משפחה חדשה (ללא תלות בהורה כרגע)
-      const { data: familyData, error: familyError } = await supabase
-        .from('families')
-        .insert({
-          name: `משפחת ${fullName}`, // שם ברירת מחדל
-        })
-        .select()
-        .single();
-
-      if (familyError) throw familyError;
-      if (!familyData) throw new Error('שגיאה ביצירת משפחה');
-
-      // 3. יצירת פרופיל הורה שמקושר למשפחה החדשה
-      const { error: parentError } = await supabase
-        .from('parents')
-        .insert({
-          id: userId,            // ה-ID הזהה ל-Auth
-          family_id: familyData.id,
-          name: fullName,
-          email: email,
-        });
-
-      if (parentError) throw parentError;
-
-      // 4. שלב קריטי: רענון הפרופיל והמתנה
-      // זה מבטיח שהאפליקציה תדע שהמשתמש החדש הוא "הורה" ותכניס אותו פנימה
-      await new Promise(resolve => setTimeout(resolve, 500)); // המתנה קטנה למסד הנתונים
-      await refreshProfile();
-
-      Alert.alert('הצלחה', 'החשבון נוצר בהצלחה!', [
-        { text: 'מעולה', onPress: () => router.replace('/(tabs)') } // מעבר בטוח
-      ]);
-
-    } catch (error: any) {
-      console.error('Registration error:', error);
-      Alert.alert('שגיאה בהרשמה', error.message);
-    } finally {
+    // קריאה לפונקציה המתוקנת מ-authService
+    const { user, error } = await signUpParent(email, password, fullName);
+    
+    if (error) {
+      Alert.alert('שגיאה בהרשמה', (error as any).message || 'משהו השתבש');
       setLoading(false);
+      return;
     }
+
+    // המתנה קצרה לוודא שהדאטהבייס התעדכן ואז רענון הפרופיל
+    setTimeout(async () => {
+      await refreshProfile();
+      setLoading(false);
+      Alert.alert('הצלחה', 'החשבון נוצר בהצלחה!', [
+        { text: 'מעולה', onPress: () => router.replace('/(tabs)') }
+      ]);
+    }, 1000);
   };
 
   return (
@@ -148,7 +103,6 @@ export default function ParentLoginScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.formContainer}>
             
-            {/* שדה שם מלא - מופיע רק בהרשמה */}
             {isSignUp && (
               <View style={styles.inputContainer}>
                 <User size={20} color="#666" style={styles.inputIcon} />
