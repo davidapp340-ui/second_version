@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -11,102 +11,29 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Star, TrendingUp, Target, Info, Award, Bell, Heart, ThumbsUp, Smile } from 'lucide-react-native';
-import { getCurrentUser } from '@/lib/authService';
-import { getChildByUserId } from '@/lib/familyService';
-import type { Child } from '@/lib/familyService';
-import { getChildPoints, type ChildPoints } from '@/lib/pointsService';
-import { getChildNotifications, markChildNotificationAsRead, type ChildNotification } from '@/lib/notificationService';
+import { Star, TrendingUp, Target, Info, Award, Bell, Heart } from 'lucide-react-native';
+import { useChildHomeData } from '@/hooks/useChildHomeData'; // הייבוא החדש שלנו
 
 export default function ChildHomeScreen() {
   const router = useRouter();
-
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [childName, setChildName] = useState('');
-  const [childData, setChildData] = useState<Child | null>(null);
-  const [isLinked, setIsLinked] = useState(false);
   const [showVisionModal, setShowVisionModal] = useState(false);
-  const [dailyMessage, setDailyMessage] = useState('');
-  const [points, setPoints] = useState<ChildPoints | null>(null);
-  const [notifications, setNotifications] = useState<ChildNotification[]>([]);
+  
+  // שימוש ב"מוח" שבנינו
+  const {
+    loading,
+    refreshing,
+    childName,
+    childData,
+    isLinked,
+    dailyMessage,
+    points,
+    notifications,
+    onRefresh,
+    markNotificationRead
+  } = useChildHomeData();
 
-  const loadData = async () => {
-    try {
-      const user = await getCurrentUser();
-      if (!user) {
-        router.replace('/auth/child-login');
-        return;
-      }
-
-      const firstName = user.user_metadata?.first_name || 'ידידי';
-      setChildName(firstName);
-
-      const child = await getChildByUserId(user.id);
-      if (child) {
-        setChildData(child);
-        setIsLinked(child.is_linked);
-        generateDailyMessage(child);
-
-        try {
-          const childPoints = await getChildPoints(child.id);
-          setPoints(childPoints);
-        } catch (error) {
-          console.error('Error loading points:', error);
-        }
-
-        try {
-          const childNotifications = await getChildNotifications(child.id);
-          setNotifications(childNotifications.slice(0, 5));
-        } catch (error) {
-          console.error('Error loading notifications:', error);
-        }
-      }
-    } catch (error) {
-      console.error('Error loading child home data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const generateDailyMessage = (child: Child) => {
-    const messages = [
-      'כל הכבוד! השלמת את כל התרגילים אתמול!',
-      'אל תשכח להתאמן היום!',
-      'אתה עושה עבודה מצוינת!',
-      'כבר תרגלת היום? בוא נמשיך!',
-    ];
-
-    if (child.last_practice_date) {
-      const today = new Date().toDateString();
-      const lastPractice = new Date(child.last_practice_date).toDateString();
-      if (today === lastPractice) {
-        setDailyMessage('כל הכבוד! השלמת את התרגיל היומי! 🎉');
-        return;
-      }
-    }
-
-    const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-    setDailyMessage(randomMessage);
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
-  }, []);
-
-  const handleStartPractice = () => {
-    router.push('/(tabs)/progress');
-  };
-
-  const handleViewProgress = () => {
-    router.push('/(tabs)/progress');
-  };
+  const handleStartPractice = () => router.push('/(tabs)/progress');
+  const handleViewProgress = () => router.push('/(tabs)/progress');
 
   const calculateWeeklyProgress = () => {
     if (!childData) return 0;
@@ -115,25 +42,9 @@ export default function ChildHomeScreen() {
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
-      case 'parent_reaction':
-        return <Heart size={20} color="#FF6B9D" fill="#FF6B9D" />;
-      case 'free_day_available':
-        return <Award size={20} color="#FFD700" fill="#FFD700" />;
-      default:
-        return <Bell size={20} color="#4FFFB0" />;
-    }
-  };
-
-  const handleNotificationPress = async (notification: ChildNotification) => {
-    if (!notification.is_read) {
-      try {
-        await markChildNotificationAsRead(notification.id);
-        setNotifications(prev =>
-          prev.map(n => n.id === notification.id ? { ...n, is_read: true } : n)
-        );
-      } catch (error) {
-        console.error('Error marking notification as read:', error);
-      }
+      case 'parent_reaction': return <Heart size={20} color="#FF6B9D" fill="#FF6B9D" />;
+      case 'free_day_available': return <Award size={20} color="#FFD700" fill="#FFD700" />;
+      default: return <Bell size={20} color="#4FFFB0" />;
     }
   };
 
@@ -213,7 +124,7 @@ export default function ChildHomeScreen() {
                   styles.notificationItem,
                   !notification.is_read && styles.notificationItemUnread,
                 ]}
-                onPress={() => handleNotificationPress(notification)}
+                onPress={() => markNotificationRead(notification)}
                 activeOpacity={0.7}
               >
                 <View style={styles.notificationIcon}>
@@ -329,23 +240,18 @@ export default function ChildHomeScreen() {
           >
             <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
               <Text style={styles.modalTitle}>החזון שלנו</Text>
-
               <Text style={styles.modalText}>
                 אנחנו חברה שמתמקדת במחקר ופיתוח של טכנולוגיה חדשנית לשיפור הראייה אצל ילדים.
               </Text>
-
               <Text style={styles.modalText}>
                 המטרה שלנו היא ליצור פתרונות ללא צורך בניתוחים או משקפיים, באמצעות תרגילים ממוקדים שמשפרים את יכולת העיניים באופן טבעי.
               </Text>
-
               <Text style={styles.modalText}>
                 כל תרגיל שאתה עושה עוזר לנו ללמוד ולשפר את הטכנולוגיה, ובכך לעזור לילדים נוספים בכל העולם!
               </Text>
-
               <Text style={styles.modalHighlight}>
                 אתה חלק ממשהו גדול! 🌟
               </Text>
-
               <TouchableOpacity
                 style={styles.modalCloseButton}
                 onPress={() => setShowVisionModal(false)}
@@ -360,6 +266,7 @@ export default function ChildHomeScreen() {
   );
 }
 
+// נשאיר את ה-StyleSheet בסוף הקובץ כפי שהוא היה
 const styles = StyleSheet.create({
   container: {
     flex: 1,
