@@ -25,6 +25,7 @@ export interface ChildProfile {
 
 /**
  * 1. Parent Registration
+ * יוצר משתמש, ה-Trigger ב-SQL משלים את היתר.
  */
 export async function signUpParent(email: string, password: string, fullName: string) {
   try {
@@ -97,12 +98,11 @@ export async function signIn(email: string, password: string) {
 }
 
 /**
- * 4. Linked Child Login (Magic Code) - UPDATED
- * משתמש ב-RPC כדי לעקוף RLS
+ * 4. Linked Child Login (Magic Code)
+ * משתמש ב-RPC כדי לעקוף את חסימת ה-RLS
  */
 export async function loginWithCode(code: string) {
   try {
-    // קריאה לפונקציית ה-SQL המיוחדת שיצרנו
     const { data, error } = await supabase.rpc('check_child_code', {
       code_input: code
     });
@@ -139,7 +139,7 @@ export async function getCurrentUserWithProfile() {
       .single();
 
     if (error || !profile) {
-      console.log('No profile found for auth user');
+      console.log('No profile found (might be linked child)');
       return { user, profile: null };
     }
 
