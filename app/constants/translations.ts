@@ -1,38 +1,33 @@
-// זהו קובץ המילון שלנו. כרגע הוא בעברית בלבד.
-// בעתיד, אם תרצה אנגלית, פשוט ניצור קובץ דומה עם תרגום.
+// app/constants/translations.ts
 
 export const HEBREW_TRANSLATIONS = {
-  // --- מסך פתיחה וניווט ---
+  // --- ניווט ---
   'nav.home': 'בית',
   'nav.gallery': 'גלריה',
   'nav.info': 'מידע',
   'nav.settings': 'הגדרות',
   'nav.progress': 'התקדמות',
   
-  // --- מסך הבית (Home) ---
+  // --- מסך הבית ---
   'home.welcome': 'שלום',
   'home.track_title': 'מסלול האימון שלך',
   'home.start_day': 'התחל אימון',
   'home.day_locked': 'יום נעול',
   'home.completed': 'הושלם',
 
-  // --- גלריה (Gallery) ---
+  // --- גלריה ---
   'gallery.title': 'ספריית התרגילים',
   'gallery.filter_all': 'הכל',
   'gallery.search': 'חפש תרגיל...',
 
-  // --- הגדרות ופרופיל ---
+  // --- הגדרות ---
   'settings.title': 'הגדרות משתמש',
-  'settings.logout': 'התנתק',
-  'settings.delete_account': 'מחק חשבון',
+  'settings.save': 'שמור שינויים',
   
-  // --- הודעות מערכת ---
-  'common.loading': 'טוען נתונים...',
-  'common.error': 'אירעה שגיאה, נסה שנית',
-  'common.save': 'שמור שינויים',
-  'common.back': 'חזור',
+  // --- כללי ---
+  'common.loading': 'טוען...',
+  'common.error': 'שגיאה',
 };
 
-// הגדרת "טיפוס" (Type) שעוזר למחשב להבין אילו מפתחות קיימים
-// זה ימנע ממך טעויות כתיב בקוד
+// יצוא של הטיפוס (Type) כדי שהמחשב יכיר את המפתחות
 export type TranslationKey = keyof typeof HEBREW_TRANSLATIONS;
