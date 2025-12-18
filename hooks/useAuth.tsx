@@ -1,195 +1,147 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Session, User } from '@supabase/supabase-js';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '@/lib/supabase';
+import { useRouter, useSegments } from 'expo-router';
+import { AuthState, ChildLoginResponse, ChildProfile, UserRole } from '@/types/auth';
 import { 
   getCurrentUserProfile, 
-  loginWithCode as serviceLoginWithCode,
-  signOut as serviceSignOut
+  getStoredChildCredentials, 
+  getChildByToken, 
+  signOut as authSignOut,
+  pairDeviceWithCode,
+  signIn as authSignIn,
+  signUpParent as authSignUpParent
 } from '@/lib/authService';
-import { UserProfile, ChildProfile } from '@/types/auth';
+import { supabase } from '@/lib/supabase';
 
-// מפתח לשמירת פרופיל הילד בזיכרון המכשיר (לצורך צימוד קבוע)
-const STORAGE_KEY_LINKED_CHILD = 'zoomi_linked_child_profile';
-
-type AuthContextType = {
-  // מצב 1: משתמש רגיל (הורה / ילד עצמאי)
-  session: Session | null;
-  user: User | null;         // אובייקט המשתמש של Supabase
-  profile: UserProfile | null; // הפרופיל מה-DB
-
-  // מצב 2: ילד מקושר (ללא אימייל)
-  linkedChild: ChildProfile | null;
-  isLinkedMode: boolean; // <-- התוספת החדשה: דגל ברור למצב מקושר
-
-  // מצב כללי
-  loading: boolean;
-  
-  // פעולות
-  signInWithCode: (code: string) => Promise<{ error: string | null }>;
-  signOutUser: () => Promise<void>;
-  refreshUserData: () => Promise<void>; // פונקציה לרענון ידני של הנתונים
-};
-
-const AuthContext = createContext<AuthContextType>({
-  session: null,
-  user: null,
-  profile: null,
-  linkedChild: null,
-  isLinkedMode: false, // <-- ערך ברירת מחדל
-  loading: true,
-  signInWithCode: async () => ({ error: null }),
-  signOutUser: async () => {},
-  refreshUserData: async () => {},
-});
-
-export function useAuth() {
-  return useContext(AuthContext);
+interface AuthContextType extends AuthState {
+  signIn: (e: string, p: string) => Promise<{ error: any }>;
+  signUpParent: (e: string, p: string, n: string) => Promise<{ error: any }>;
+  signInWithCode: (code: string) => Promise<{ success: boolean; error?: string }>;
+  signOut: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
+const AuthContext = createContext<AuthContextType | null>(null);
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // State עבור משתמשים רשומים (Supabase Auth)
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    child: null,
+    role: 'GUEST',
+    isLoading: true,
+    isAuthenticated: false,
+  });
 
-  // State עבור ילד מקושר (Local Storage)
-  const [linkedChild, setLinkedChild] = useState<ChildProfile | null>(null);
+  const router = useRouter();
+  const segments = useSegments();
 
-  const [loading, setLoading] = useState(true);
-
-  // חישוב המצב המקושר - אם יש ילד בזיכרון, אנחנו במצב מקושר
-  const isLinkedMode = !!linkedChild;
-
-  // 1. אתחול ראשוני: בדיקה מי מחובר
-  useEffect(() => {
-    initializeAuth();
-
-    // האזנה לשינויים ב-Supabase (למשל: תוקף טוקן פג)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user) {
-        // אם יש סשן, נטען את הפרופיל וננקה ילד מקושר (לא יכולים להיות שניהם יחד)
-        await loadUserProfile();
-        setLinkedChild(null); 
-        await AsyncStorage.removeItem(STORAGE_KEY_LINKED_CHILD);
-      } else if (!linkedChild) {
-        // אם התנתקנו מהסשן ואין ילד מקושר בזיכרון -> איפוס
-        setProfile(null);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  // פונקציית הטעינה הראשית
-  const initializeAuth = async () => {
+  // פונקציית הבדיקה הראשית - מי אני?
+  const checkUser = async () => {
     try {
-      setLoading(true);
-
-      // א. בדיקה אם יש משתמש רגיל (הורה/עצמאי)
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      // 1. בדיקת משתמש רשום (הורה / ילד עצמאי)
+      const userProfile = await getCurrentUserProfile();
       
-      if (currentSession?.user) {
-        setSession(currentSession);
-        setUser(currentSession.user);
-        await loadUserProfile();
-      } else {
-        // ב. אם אין משתמש רגיל, נבדוק אם יש "ילד מקושר" שמור בזיכרון
-        const savedChildJson = await AsyncStorage.getItem(STORAGE_KEY_LINKED_CHILD);
-        if (savedChildJson) {
-          try {
-            const parsedChild = JSON.parse(savedChildJson) as ChildProfile;
-            setLinkedChild(parsedChild);
-          } catch (e) {
-            console.error('Failed to parse saved child:', e);
-            await AsyncStorage.removeItem(STORAGE_KEY_LINKED_CHILD);
-          }
+      if (userProfile) {
+        setState({
+          user: userProfile,
+          child: null,
+          role: userProfile.role,
+          isLoading: false,
+          isAuthenticated: true
+        });
+        return;
+      }
+
+      // 2. בדיקת ילד מקושר (Token בזיכרון)
+      const storedCreds = await getStoredChildCredentials();
+      if (storedCreds && storedCreds.childId && storedCreds.token) {
+        const response = await getChildByToken(storedCreds.childId, storedCreds.token);
+        
+        if (response.success && response.child) {
+          setState({
+            user: null,
+            child: response.child,
+            role: response.child.isIndependent ? 'child_independent' : 'child_linked', // לרוב זה יהיה linked
+            isLoading: false,
+            isAuthenticated: true
+          });
+          return;
         }
       }
+
+      // 3. אף אחד לא מחובר - אורח
+      setState({
+        user: null,
+        child: null,
+        role: 'GUEST',
+        isLoading: false,
+        isAuthenticated: false
+      });
+
     } catch (error) {
-      console.error('Auth initialization failed:', error);
-    } finally {
-      setLoading(false);
+      console.error('Auth check failed:', error);
+      setState(prev => ({ ...prev, isLoading: false }));
     }
   };
 
-  // טעינת פרופיל משתמש (הורה/עצמאי)
-  const loadUserProfile = async () => {
-    const userProfile = await getCurrentUserProfile();
-    setProfile(userProfile);
-  };
+  // הרצה ראשונית והאזנה לשינויים ב-Supabase
+  useEffect(() => {
+    checkUser();
 
-  // פעולה: כניסת ילד עם קוד
-  const signInWithCode = async (code: string) => {
-    setLoading(true);
-    const { child, error } = await serviceLoginWithCode(code);
-    
-    if (child) {
-      // שמירה בזיכרון המכשיר (Pairing)
-      await AsyncStorage.setItem(STORAGE_KEY_LINKED_CHILD, JSON.stringify(child));
-      setLinkedChild(child);
-      
-      // וידוא שאין משתמשים אחרים מחוברים
-      if (session) await supabase.auth.signOut();
-      setSession(null);
-      setUser(null);
-      setProfile(null);
-    }
-    
-    setLoading(false);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
+      checkUser();
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // --- פעולות ---
+
+  const signIn = async (email: string, pass: string) => {
+    const { error } = await authSignIn(email, pass);
+    if (!error) await checkUser();
     return { error };
   };
 
-  // פעולה: יציאה מלאה (Reset)
-  const signOutUser = async () => {
-    setLoading(true);
-    try {
-      // 1. ניקוי סופרבייס
-      await serviceSignOut();
-      // 2. ניקוי זיכרון מקומי
-      await AsyncStorage.removeItem(STORAGE_KEY_LINKED_CHILD);
-      
-      // 3. איפוס סטייט
-      setSession(null);
-      setUser(null);
-      setProfile(null);
-      setLinkedChild(null);
-    } catch (error) {
-      console.error('Sign out error:', error);
-    } finally {
-      setLoading(false);
-    }
+  const signUpParent = async (email: string, pass: string, name: string) => {
+    const { error } = await authSignUpParent(email, pass, name);
+    if (!error) await checkUser();
+    return { error };
   };
 
-  // רענון נתונים (שימושי כשרוצים לעדכן נקודות וכו')
-  const refreshUserData = async () => {
-    if (session) {
-      await loadUserProfile();
+  const signInWithCode = async (code: string) => {
+    setState(prev => ({ ...prev, isLoading: true }));
+    const result = await pairDeviceWithCode(code);
+    
+    if (result.success) {
+      await checkUser(); // רענון המצב כדי לזהות את הילד החדש
+    } else {
+      setState(prev => ({ ...prev, isLoading: false }));
     }
-    // הערה: עבור ילד מקושר, נצטרך בעתיד לוגיקה לרענון מול השרת
-    // כרגע הנתונים נשארים מה שנשמר בזיכרון בעת החיבור
+    return result;
+  };
+
+  const signOut = async () => {
+    await authSignOut();
+    await checkUser();
+    router.replace('/'); // חזרה למסך הפתיחה
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        session,
-        user,
-        profile,
-        linkedChild,
-        isLinkedMode, // <-- חשיפה החוצה לכל האפליקציה
-        loading,
-        signInWithCode,
-        signOutUser,
-        refreshUserData
-      }}
-    >
+    <AuthContext.Provider value={{ 
+      ...state, 
+      signIn, 
+      signUpParent, 
+      signInWithCode, 
+      signOut,
+      refreshUser: checkUser
+    }}>
       {children}
     </AuthContext.Provider>
   );
 }
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
+  return context;
+};
