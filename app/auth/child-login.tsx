@@ -9,11 +9,13 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '@/hooks/useAuth';
-import { Ionicons } from '@expo/vector-icons';
+import { ArrowRight, KeyRound } from 'lucide-react-native';
 
 export default function ChildLoginScreen() {
   const router = useRouter();
@@ -23,91 +25,98 @@ export default function ChildLoginScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (code.length < 3) {
-      Alert.alert('שגיאה', 'נא להזין קוד תקין');
+    // ניקוי רווחים ושמירה על אותיות גדולות
+    const cleanCode = code.trim().toUpperCase();
+
+    if (cleanCode.length < 6) {
+      Alert.alert('שגיאה', 'נא להזין קוד מלא (6 תווים)');
       return;
     }
 
     setLoading(true);
-    const { error } = await signInWithCode(code);
+    // קריאה לפונקציה ב-useAuth שמבצעת את הצימוד ושומרת בזיכרון
+    const { error } = await signInWithCode(cleanCode);
     
     if (error) {
-      Alert.alert('אופס', 'הקוד שהזנת לא נכון. נסה שוב או בקש מאבא/אמא.');
+      Alert.alert('התחברות נכשלה', 'הקוד שגוי או פג תוקף. בקש מאבא או אמא קוד חדש.');
       setLoading(false);
     } else {
-      // הכניסה הצליחה - ה-Hook כבר מעדכן את המצב
-      // ה-Layout יזהה את השינוי ויעביר לטאבים אוטומטית
+      // הצלחה!
+      // אין צורך לנווט ידנית - ה-_layout יזהה ש-useUserRole השתנה
+      // ויעביר אותנו אוטומטית למסך הבית.
     }
   };
 
   return (
-    <View style={styles.container}>
-      <LinearGradient
-        colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
-        locations={[0, 0.5, 1]}
-        style={styles.gradient}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.content}
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <View style={styles.container}>
+        <LinearGradient
+          colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
+          locations={[0, 0.5, 1]}
+          style={styles.gradient}
         >
-          {/* כפתור חזרה */}
-          <TouchableOpacity 
-            style={styles.backButton} 
-            onPress={() => router.back()}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.content}
           >
-            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
-          </TouchableOpacity>
-
-          <View style={styles.header}>
-            <View style={styles.iconContainer}>
-              <Text style={styles.icon}>🔑</Text>
-            </View>
-            <Text style={styles.title}>כניסת ילד</Text>
-            <Text style={styles.subtitle}>
-              הכנס את קוד הקסם שאבא או אמא נתנו לך
-            </Text>
-          </View>
-
-          <View style={styles.form}>
-            <View style={styles.inputContainer}>
-              <TextInput
-                style={styles.input}
-                placeholder="הכנס קוד כאן (למשל: A1B2C3)"
-                placeholderTextColor="rgba(26, 26, 26, 0.5)"
-                value={code}
-                onChangeText={(text) => setCode(text.toUpperCase())} // המרה אוטומטית לאותיות גדולות
-                autoCapitalize="characters"
-                autoCorrect={false}
-                maxLength={8}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.button, loading && styles.buttonDisabled]}
-              onPress={handleLogin}
+            {/* כפתור חזרה */}
+            <TouchableOpacity 
+              style={styles.backButton} 
+              onPress={() => router.back()}
               disabled={loading}
             >
-              {loading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={styles.buttonText}>כנס למשחק!</Text>
-              )}
+              <ArrowRight size={24} color="#1A1A1A" />
             </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </LinearGradient>
-    </View>
+
+            <View style={styles.header}>
+              <View style={styles.iconContainer}>
+                <KeyRound size={40} color="#1A1A1A" />
+              </View>
+              <Text style={styles.title}>כניסת ילד</Text>
+              <Text style={styles.subtitle}>
+                הכנס את הקוד שמופיע אצל ההורה
+              </Text>
+            </View>
+
+            <View style={styles.form}>
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="A1B2C3"
+                  placeholderTextColor="rgba(26, 26, 26, 0.3)"
+                  value={code}
+                  onChangeText={(text) => setCode(text.toUpperCase())}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={6}
+                  returnKeyType="go"
+                  onSubmitEditing={handleLogin}
+                  editable={!loading}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[styles.button, (loading || code.length < 6) && styles.buttonDisabled]}
+                onPress={handleLogin}
+                disabled={loading || code.length < 6}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.buttonText}>התחבר למשחק!</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </LinearGradient>
+      </View>
+    </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  gradient: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+  gradient: { flex: 1 },
   content: {
     flex: 1,
     padding: 24,
@@ -143,9 +152,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 5,
   },
-  icon: {
-    fontSize: 40,
-  },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
@@ -173,11 +179,12 @@ const styles = StyleSheet.create({
   },
   input: {
     padding: 16,
-    fontSize: 24, // טקסט גדול וברור
+    fontSize: 32,
     color: '#1A1A1A',
     fontWeight: 'bold',
     textAlign: 'center',
-    letterSpacing: 4, // רווח בין האותיות לקריאות טובה
+    letterSpacing: 8,
+    height: 80,
   },
   button: {
     backgroundColor: '#1A1A1A',
@@ -191,7 +198,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   buttonDisabled: {
-    opacity: 0.7,
+    opacity: 0.5,
   },
   buttonText: {
     color: '#FFFFFF',
