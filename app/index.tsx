@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Animated, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Animated, Dimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useScreenTexts } from '@/hooks/useTexts';
@@ -9,15 +9,17 @@ const { width, height } = Dimensions.get('window');
 
 export default function SplashScreen() {
   const router = useRouter();
+  // טעינת טקסטים (אם יש מנגנון כזה)
   const { getText, loading: textLoading } = useScreenTexts('splash');
-  const { role, loading: authLoading } = useUserRole(); // המוח החדש שלנו
+  // שימוש במוח החדש כדי לדעת מי המשתמש
+  const { role, loading: authLoading } = useUserRole();
   
   const [isAnimationDone, setIsAnimationDone] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
 
+  // 1. אנימציית פתיחה
   useEffect(() => {
-    // הפעלת אנימציה בכניסה
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -31,23 +33,25 @@ export default function SplashScreen() {
         useNativeDriver: true,
       }),
     ]).start(() => {
-      // כשהאנימציה מסתיימת
       setIsAnimationDone(true);
     });
   }, []);
 
+  // 2. לוגיקת הניווט
   useEffect(() => {
-    // לוגיקת הניווט: מחכים שהאנימציה תסתיים ושהנתונים ייטענו
+    // מחכים שהכל יסתיים: טעינת נתונים + אנימציה
     if (!textLoading && !authLoading && isAnimationDone) {
       
-      // אם המשתמש כבר מחובר (הורה/ילד), ה-_layout יעביר אותו אוטומטית לטאבים.
-      // לכן אנחנו מטפלים פה רק במקרה של "אורח" שצריך להמשיך להרשמה.
+      // אם המשתמש הוא אורח (לא מחובר) -> שלח אותו לבחור סוג משתמש
       if (role === 'GUEST') {
         const timer = setTimeout(() => {
           router.replace('/user-type');
-        }, 500); // השהייה קצרה לחוויה נעימה
+        }, 500);
         return () => clearTimeout(timer);
       }
+      
+      // אם המשתמש מחובר (PARENT/CHILD), אנחנו לא צריכים לעשות כלום כאן.
+      // הקובץ app/_layout.tsx יזהה את זה ויעביר אותו אוטומטית לתוך האפליקציה (tabs).
     }
   }, [textLoading, authLoading, isAnimationDone, role]);
 
@@ -71,6 +75,7 @@ export default function SplashScreen() {
         </Animated.View>
 
         <Animated.Image
+          // ודא שהתמונה קיימת בנתיב הזה, אחרת הסימולטור יקרוס
           source={require('@/assets/images/A hawk character wearing glasses, designed in the style of Duolingo\'s owl, with a simpler design, no background, and a friendly expression copy.png')}
           style={[
             styles.hawkImage,
