@@ -3,24 +3,21 @@ import { View, Text, StyleSheet, Animated, Dimensions, ActivityIndicator } from 
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useScreenTexts } from '@/hooks/useTexts';
+import { useUserRole } from '@/hooks/useUserRole';
 
 const { width, height } = Dimensions.get('window');
 
 export default function SplashScreen() {
   const router = useRouter();
-  const { getText, loading } = useScreenTexts('splash');
-  const [isReady, setIsReady] = useState(false);
+  const { getText, loading: textLoading } = useScreenTexts('splash');
+  const { role, loading: authLoading } = useUserRole(); // המוח החדש שלנו
+  
+  const [isAnimationDone, setIsAnimationDone] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
 
   useEffect(() => {
-    if (!loading) {
-      checkSessionAndNavigate();
-    }
-  }, [loading]);
-
-  const checkSessionAndNavigate = async () => {
-    setIsReady(true);
+    // הפעלת אנימציה בכניסה
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -33,35 +30,26 @@ export default function SplashScreen() {
         friction: 7,
         useNativeDriver: true,
       }),
-    ]).start();
+    ]).start(() => {
+      // כשהאנימציה מסתיימת
+      setIsAnimationDone(true);
+    });
+  }, []);
 
-    const { checkAndRestoreSession } = await import('@/lib/sessionService');
-    const hasSession = await checkAndRestoreSession();
-
-    const timer = setTimeout(() => {
-      if (hasSession) {
-        router.replace('/(tabs)');
-      } else {
-        router.replace('/user-type');
+  useEffect(() => {
+    // לוגיקת הניווט: מחכים שהאנימציה תסתיים ושהנתונים ייטענו
+    if (!textLoading && !authLoading && isAnimationDone) {
+      
+      // אם המשתמש כבר מחובר (הורה/ילד), ה-_layout יעביר אותו אוטומטית לטאבים.
+      // לכן אנחנו מטפלים פה רק במקרה של "אורח" שצריך להמשיך להרשמה.
+      if (role === 'GUEST') {
+        const timer = setTimeout(() => {
+          router.replace('/user-type');
+        }, 500); // השהייה קצרה לחוויה נעימה
+        return () => clearTimeout(timer);
       }
-    }, 2500);
-
-    return () => clearTimeout(timer);
-  };
-
-  if (!isReady) {
-    return (
-      <View style={styles.container}>
-        <LinearGradient
-          colors={['#B4FF39', '#4FFFB0', '#4DD9D9']}
-          locations={[0, 0.5, 1]}
-          style={styles.gradient}
-        >
-          <ActivityIndicator size="large" color="#1A1A1A" />
-        </LinearGradient>
-      </View>
-    );
-  }
+    }
+  }, [textLoading, authLoading, isAnimationDone, role]);
 
   return (
     <View style={styles.container}>
@@ -111,6 +99,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: '25%',
     alignItems: 'center',
+    zIndex: 10,
   },
   appName: {
     fontSize: 72,
