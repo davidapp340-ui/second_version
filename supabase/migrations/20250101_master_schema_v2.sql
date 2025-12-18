@@ -1,21 +1,24 @@
 /*
-  MASTER SCHEMA V5 - FINAL HYBRID MODEL
+  MASTER SCHEMA V3 - FULL REBUILD (HYBRID MODEL)
   -------------------------------------------------------------------------
-  גרסה מאוחדת:
-  1. ניהול משתמשים (הורים, ילדים עצמאיים, ילדים מקושרים).
-  2. מנגנון צימוד (Pairing) עם קוד תקף ל-24 שעות.
-  3. מערכת תוכן, התקדמות והתראות.
+  גרסה מאוחדת ומתוקנת:
+  1. טבלאות ליבה (משפחות, פרופילים, ילדים).
+  2. מנגנון צימוד מכשיר (Device Pairing) ללא סיסמה.
+  3. תוכן (תרגילים, מסלולים) פתוח לקריאה לכולם (גם למכשירים מקושרים).
 */
 
 -- ==========================================
 -- 1. ניקוי מלא (Clean Slate)
 -- ==========================================
+-- מחיקת טריגרים ופונקציות
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 DROP FUNCTION IF EXISTS public.handle_new_user();
 
--- ניקוי פונקציות הצימוד
+-- ניקוי פונקציות הצימוד הישנות והחדשות
 DROP FUNCTION IF EXISTS generate_linking_code(uuid);
 DROP FUNCTION IF EXISTS check_child_code(text);
+DROP FUNCTION IF EXISTS pair_device_with_code(text);
+DROP FUNCTION IF EXISTS get_child_data_by_token(uuid, uuid);
 
 -- ניקוי טבלאות (סדר מחיקה חשוב בגלל קשרי גומלין)
 DROP TABLE IF EXISTS notifications CASCADE;
@@ -50,24 +53,29 @@ CREATE TABLE profiles (
   created_at timestamptz DEFAULT now()
 );
 
--- 3. ילדים (השחקנים)
+-- 3. ילדים (השחקנים) - כולל השינוי של device_token
 CREATE TABLE children (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   family_id uuid REFERENCES families(id) ON DELETE CASCADE,
   user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL, -- לילד עצמאי
+  
   name text NOT NULL,
   age integer DEFAULT 0,
   avatar_url text DEFAULT 'default',
   is_independent boolean DEFAULT false,
   
-  -- שדות למנגנון הצימוד
+  -- שדות למנגנון הצימוד החדש
   linking_code text, 
   linking_code_expires_at timestamptz,
+  device_token uuid DEFAULT gen_random_uuid(), -- המפתח הסודי של המכשיר
   
   points integer DEFAULT 0,
   daily_streak integer DEFAULT 0,
   created_at timestamptz DEFAULT now()
 );
+
+-- אינדקס לחיפוש מהיר של מכשירים מקושרים
+CREATE INDEX idx_children_device_token ON children(device_token);
 
 -- ==========================================
 -- 3. תוכן: תרגילים ומסלולים
@@ -214,6 +222,7 @@ ALTER TABLE track_day_assignments ENABLE ROW LEVEL SECURITY;
 
 -- מדיניות (Policies)
 
+-- א. פרופילים ומשפחות (רק למשתמשים רשומים)
 CREATE POLICY "Users view own profile" ON profiles 
   FOR SELECT USING (auth.uid() = id);
 
@@ -222,31 +231,34 @@ CREATE POLICY "Users view own family" ON families
     id IN (SELECT family_id FROM profiles WHERE id = auth.uid())
   );
 
--- הורים רואים את כל הילדים במשפחה שלהם
+-- ב. ילדים - הורים רואים הכל, ילד עצמאי רואה את עצמו
+-- (הערה: ילד מקושר ניגש דרך פונקציית ה-RPC ולא ישירות דרך הטבלה ברוב המקרים,
+--  אבל אם נרצה לאפשר לו עדכון, נצטרך לוגיקה מבוססת Token כאן בעתיד. לבינתיים ה-RPC מספיק לקריאה).
 CREATE POLICY "Parents view family children" ON children
   FOR ALL USING (
     family_id IN (SELECT family_id FROM profiles WHERE id = auth.uid() AND role = 'parent')
   );
 
--- ילד עצמאי רואה רק את עצמו
 CREATE POLICY "Independent child views self" ON children
-  FOR ALL USING (
-    user_id = auth.uid()
-  );
+  FOR ALL USING (user_id = auth.uid());
 
--- ילד מקושר (שנכנס עם קוד - אין לו auth.uid רגיל בשלב ה-Select הראשוני, 
--- ולכן הגישה תהיה דרך פונקציית ה-RPC, אך אם נרצה לאפשר גישה עתידית:)
--- כרגע הגישה לנתוני הילד תתבצע דרך הפונקציה המאובטחת למטה.
+-- ג. תוכן (תרגילים ומסלולים) - פתוח לכולם! (כולל anon/ילד מקושר)
+CREATE POLICY "Public read exercises" ON eye_exercises 
+  FOR SELECT TO anon, authenticated USING (true);
 
--- תוכן: קריאה לכולם (מחוברים)
-CREATE POLICY "Read exercises" ON eye_exercises FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Read tracks" ON training_tracks FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Read track days" ON track_days FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Read assignments" ON track_day_assignments FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Public read tracks" ON training_tracks 
+  FOR SELECT TO anon, authenticated USING (true);
 
--- התקדמות: לפי הרשאות צפייה בילד
-CREATE POLICY "Manage progress" ON user_track_progress 
-  FOR ALL USING (
+CREATE POLICY "Public read track days" ON track_days 
+  FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "Public read assignments" ON track_day_assignments 
+  FOR SELECT TO anon, authenticated USING (true);
+
+-- ד. התקדמות (Progress)
+-- הורים וילדים עצמאיים רואים לפי ההרשאות הרגילות
+CREATE POLICY "Manage progress auth" ON user_track_progress 
+  FOR ALL TO authenticated USING (
     child_id IN (
       SELECT id FROM children WHERE 
         (user_id = auth.uid()) OR 
@@ -255,36 +267,78 @@ CREATE POLICY "Manage progress" ON user_track_progress
   );
 
 -- ==========================================
--- 7. פונקציות הצימוד (The Pairing Logic)
+-- 7. פונקציות הצימוד החדשות (The Pairing Logic V2)
 -- ==========================================
 
--- א. יצירת קוד זמני (גישה להורה בלבד)
+-- א. פונקציית הצימוד (Pairing) - הלב של המערכת החדשה
+CREATE OR REPLACE FUNCTION pair_device_with_code(code_input text)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+DECLARE
+  v_child_id uuid;
+  v_new_token uuid;
+BEGIN
+  -- ניקוי הקלט
+  code_input := upper(trim(code_input));
+
+  -- בדיקה: האם יש ילד עם הקוד הזה והוא בתוקף?
+  SELECT id INTO v_child_id
+  FROM public.children
+  WHERE linking_code = code_input
+    AND linking_code_expires_at > now()
+  LIMIT 1;
+
+  IF v_child_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'קוד שגוי או פג תוקף');
+  END IF;
+
+  -- יצירת טוקן חדש (מפתח סודי) למכשיר הזה
+  v_new_token := gen_random_uuid();
+
+  -- עדכון הילד: מחיקת הקוד הזמני ושמירת הטוקן
+  UPDATE public.children
+  SET device_token = v_new_token,
+      linking_code = NULL,
+      linking_code_expires_at = NULL
+  WHERE id = v_child_id;
+
+  -- החזרת המידע למכשיר
+  RETURN jsonb_build_object(
+    'success', true,
+    'child_id', v_child_id,
+    'device_token', v_new_token
+  );
+END;
+$$;
+
+-- הרשאה לכולם להריץ את הצימוד
+GRANT EXECUTE ON FUNCTION pair_device_with_code(text) TO anon, authenticated;
+
+
+-- ב. יצירת קוד זמני (גישה להורה בלבד)
 CREATE OR REPLACE FUNCTION generate_linking_code(target_child_id uuid)
 RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER
 AS $$
 DECLARE
   v_new_code text;
-  v_is_parent boolean;
 BEGIN
-  -- בדיקת הרשאה: רק הורה מאותה משפחה יכול לייצר קוד
-  SELECT EXISTS (
-    SELECT 1 
-    FROM children c
+  -- בדיקת הרשאה: רק הורה מאותה משפחה
+  IF NOT EXISTS (
+    SELECT 1 FROM children c
     JOIN profiles p ON c.family_id = p.family_id
     WHERE c.id = target_child_id 
       AND p.id = auth.uid() 
       AND p.role = 'parent'
-  ) INTO v_is_parent;
-
-  IF NOT v_is_parent THEN
+  ) THEN
     RAISE EXCEPTION 'Access Denied: Only parents can generate codes.';
   END IF;
 
-  -- יצירת קוד אקראי (6 תווים, אותיות ומספרים)
+  -- יצירת קוד אקראי (6 תווים)
   v_new_code := upper(substring(md5(random()::text || clock_timestamp()::text) from 1 for 6));
 
-  -- עדכון הקוד והתוקף ל-24 שעות
+  -- עדכון הקוד והתוקף
   UPDATE public.children
   SET linking_code = v_new_code,
       linking_code_expires_at = now() + interval '24 hours'
@@ -294,41 +348,41 @@ BEGIN
 END;
 $$;
 
--- ב. כניסה עם קוד (פתוח לכולם - גם למי שלא מחובר)
-CREATE OR REPLACE FUNCTION check_child_code(code_input text)
+GRANT EXECUTE ON FUNCTION generate_linking_code(uuid) TO authenticated;
+
+
+-- ג. גישה לנתונים עבור ילד מקושר (Secure Access via Token)
+CREATE OR REPLACE FUNCTION get_child_data_by_token(p_child_id uuid, p_token uuid)
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
 AS $$
 DECLARE
-  v_child_record record;
+  v_child record;
 BEGIN
-  -- חיפוש ילד עם הקוד המתאים ושהתוקף לא פג
-  SELECT * INTO v_child_record
+  SELECT * INTO v_child
   FROM public.children
-  WHERE linking_code = upper(code_input)
-    AND linking_code_expires_at > now()
-  LIMIT 1;
+  WHERE id = p_child_id AND device_token = p_token;
 
-  IF v_child_record.id IS NULL THEN
-    RETURN NULL;
+  IF v_child.id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid Session');
   END IF;
 
-  -- החזרת המידע בפורמט JSON
   RETURN jsonb_build_object(
-    'id', v_child_record.id,
-    'name', v_child_record.name,
-    'family_id', v_child_record.family_id,
-    'avatar_url', v_child_record.avatar_url,
-    'points', v_child_record.points,
-    'daily_streak', v_child_record.daily_streak,
-    'is_independent', v_child_record.is_independent
+    'success', true,
+    'data', jsonb_build_object(
+      'id', v_child.id,
+      'name', v_child.name,
+      'points', v_child.points,
+      'daily_streak', v_child.daily_streak,
+      'family_id', v_child.family_id,
+      'avatar_url', v_child.avatar_url,
+      'is_independent', v_child.is_independent
+    )
   );
 END;
 $$;
 
--- חשיפת הפונקציות לאפליקציה (חשוב מאוד!)
-GRANT EXECUTE ON FUNCTION generate_linking_code(uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION check_child_code(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION get_child_data_by_token(uuid, uuid) TO anon, authenticated;
 
 -- ==========================================
 -- 8. נתונים ראשוניים (Seed Data)
