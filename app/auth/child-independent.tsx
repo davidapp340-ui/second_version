@@ -15,11 +15,12 @@ import {
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowRight, User, Lock, Mail, Calendar } from 'lucide-react-native';
-import { signUpIndependentChild } from '@/lib/authService';
+import { useAuth } from '@/hooks/useAuth'; // שינוי: שימוש ב-Hook
 
 export default function ChildIndependentSignup() {
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  // שליפת פונקציית ההרשמה והמצב (loading) מהקונטקסט המרכזי
+  const { signUpIndependentChild, isLoading } = useAuth();
 
   // טופס הרשמה
   const [name, setName] = useState('');
@@ -33,10 +34,8 @@ export default function ChildIndependentSignup() {
       return;
     }
 
-    setLoading(true);
     try {
-      // הקסם קורה כאן: קריאה לפונקציה אחת פשוטה
-      // המסד נתונים (SQL) כבר ייצור אוטומטית את המשפחה והפרופיל ברקע
+      // קריאה לפונקציה מה-Context. ה-isLoading יתעדכן אוטומטית.
       const { error } = await signUpIndependentChild({
         email,
         password,
@@ -50,13 +49,12 @@ export default function ChildIndependentSignup() {
         return;
       }
 
-      // הצלחה! האפליקציה תזהה את המשתמש החדש אוטומטית ותעביר למסך הבית
-      // (אין צורך לנווט ידנית, ה-_layout יעשה את זה)
+      // הצלחה! האפליקציה תזהה את המשתמש החדש אוטומטית (ב-useAuth) ותעביר למסך הבית
+      // אין צורך בניווט ידני
+
     } catch (error: any) {
       console.error('Error signing up independent child:', error);
       Alert.alert('שגיאה', 'משהו לא עבד. נסה שוב.');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -84,6 +82,7 @@ export default function ChildIndependentSignup() {
       >
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.illustrationContainer}>
+             {/* שים לב: וודא שהתמונה אכן קיימת בנתיב הזה */}
              <Image 
                 source={require('@/assets/images/icon.png')} 
                 style={styles.characterImage}
@@ -155,9 +154,9 @@ export default function ChildIndependentSignup() {
             <TouchableOpacity
               style={styles.submitButton}
               onPress={handleSignup}
-              disabled={loading}
+              disabled={isLoading}
             >
-              {loading ? (
+              {isLoading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitButtonText}>צור חשבון והתחל!</Text>
