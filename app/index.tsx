@@ -8,8 +8,10 @@ export default function WelcomeScreen() {
   const router = useRouter();
   const { getText } = useScreenTexts('welcome');
 
-  // הסרנו מכאן את כל הלוגיקה של בדיקת משתמשים וניווט אוטומטי.
-  // זה התפקיד של _layout בלבד!
+  // הערה חשובה:
+  // הסרנו מכאן את כל הלוגיקה של בדיקת משתמשים (useEffect).
+  // הניווט האוטומטי מנוהל כעת אך ורק דרך app/_layout.tsx
+  // כדי למנוע לולאות אין-סופיות וקריסות בסימולטור.
 
   return (
     <View style={styles.container}>
@@ -21,7 +23,9 @@ export default function WelcomeScreen() {
       >
         <View style={styles.content}>
           <View style={styles.iconContainer}>
-            {/* וודא ששינית את שם הקובץ ל-icon.png או welcome_character.png */}
+            {/* תיקון קריטי: שימוש בשם קובץ פשוט ללא רווחים.
+              שמות קבצים ארוכים עם רווחים גורמים לקריסה ב-iOS/Android.
+            */}
             <Image 
               source={require('@/assets/images/icon.png')} 
               style={styles.icon}
