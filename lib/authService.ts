@@ -1,171 +1,136 @@
 import { supabase } from './supabase';
-import { UserProfile, ChildProfile, ChildLoginResponse } from '@/types/auth';
+import { ChildProfile, ChildLoginResponse, UserProfile } from '@/types/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const CHILD_STORAGE_KEY = 'zoomi_child_creds';
 
 // ==========================================
-// 1. אימות הורים (Parent Auth)
+// 1. אימות הורים (רגיל - אימייל/סיסמה)
 // ==========================================
 
 export async function signUpParent(email: string, password: string, fullName: string) {
-  try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          name: fullName,
-          role: 'parent'
-        }
-      }
-    });
-
-    if (error) throw error;
-    return { user: data.user, error: null };
-  } catch (error: any) {
-    console.error('Parent signup failed:', error);
-    return { user: null, error };
-  }
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { name: fullName, role: 'parent' } }
+  });
+  return { user: data.user, error };
 }
 
 export async function signIn(email: string, password: string) {
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) throw error;
-    return { user: data.user, error: null };
-  } catch (error: any) {
-    console.error('Sign in error:', error);
-    return { user: null, error };
-  }
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  return { user: data.user, error };
 }
 
 export async function signOut() {
-  const { error } = await supabase.auth.signOut();
-  if (error) console.error('Sign out error:', error);
+  // ניקוי כפול: גם Supabase וגם האחסון המקומי של הילד
+  await AsyncStorage.removeItem(CHILD_STORAGE_KEY);
+  await supabase.auth.signOut();
+}
+
+export async function getCurrentUserProfile(): Promise<UserProfile | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
+  if (!data) return null;
+
+  return {
+    id: data.id,
+    email: data.email,
+    name: data.full_name,
+    role: data.role,
+    familyId: data.family_id
+  };
 }
 
 // ==========================================
-// 2. ניהול ילדים (Linked Children)
+// 2. אימות ילדים (צימוד מכשיר)
 // ==========================================
 
 /**
- * יצירת רשומת ילד חדש במשפחה (ללא משתמש Auth, רק רשומה בטבלה)
+ * שלב א': ביצוע הצימוד מול השרת
+ * שולחים קוד -> מקבלים טוקן
  */
-export async function createLinkedChild(name: string, age: number, familyId: string) {
+export async function pairDeviceWithCode(code: string): Promise<ChildLoginResponse> {
   try {
-    const { data, error } = await supabase
-      .from('children')
-      .insert({
-        name,
-        age,
-        family_id: familyId,
-        is_independent: false,
-        avatar_url: 'default',
-        points: 0
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return { child: data, error: null };
-  } catch (error: any) {
-    console.error('Create linked child failed:', error);
-    return { child: null, error };
-  }
-}
-
-/**
- * יצירת קוד כניסה לילד (קורא לפונקציית ה-SQL שיצרנו בשלב 1)
- */
-export async function generateLinkingCode(childId: string): Promise<{ code: string | null; error: any }> {
-  try {
-    const { data, error } = await supabase.rpc('generate_linking_code', {
-      target_child_id: childId
-    });
-
-    if (error) throw error;
-    return { code: data as string, error: null };
-  } catch (error) {
-    console.error('Failed to generate code:', error);
-    return { code: null, error };
-  }
-}
-
-/**
- * כניסת ילד עם קוד
- */
-export async function loginWithCode(code: string): Promise<ChildLoginResponse> {
-  try {
-    const { data, error } = await supabase.rpc('check_child_code', {
+    const { data, error } = await supabase.rpc('pair_device_with_code', {
       code_input: code
     });
 
     if (error) throw error;
-    
-    if (!data) {
-      return { child: null, error: 'קוד שגוי או פג תוקף' };
-    }
+    if (!data.success) return { success: false, error: data.error };
 
-    return { child: data as ChildProfile, error: null };
-  } catch (error: any) {
-    console.error('Login with code failed:', error);
-    return { child: null, error: error.message || 'שגיאת תקשורת' };
+    // בשלב זה הצימוד הצליח, אבל אנחנו צריכים לשלוף את פרטי הילד המלאים
+    // נשתמש בטוקן שקיבלנו הרגע
+    return await getChildByToken(data.child_id, data.device_token);
+
+  } catch (err: any) {
+    console.error('Pairing failed:', err);
+    return { success: false, error: err.message };
   }
 }
 
-// ==========================================
-// 3. ילדים עצמאיים (Independent Child)
-// ==========================================
-
-export async function signUpIndependentChild(data: {
-  email: string;
-  password: string;
-  name: string;
-  age: string;
-  avatarUrl: string;
-}) {
+/**
+ * שלב ב': שליפת נתונים באמצעות טוקן (כניסה יומיומית)
+ */
+export async function getChildByToken(childId: string, token: string): Promise<ChildLoginResponse> {
   try {
-    const { data: authData, error } = await supabase.auth.signUp({
-      email: data.email,
-      password: data.password,
-      options: {
-        data: {
-          name: data.name,
-          age: data.age,
-          avatarUrl: data.avatarUrl,
-          role: 'child_independent'
-        }
-      }
+    const { data, error } = await supabase.rpc('get_child_data_by_token', {
+      p_child_id: childId,
+      p_token: token
     });
 
     if (error) throw error;
-    return { user: authData.user, error: null };
-  } catch (error: any) {
-    console.error('Independent child signup failed:', error);
-    return { user: null, error };
+    if (!data.success) return { success: false, error: 'Auth failed' };
+
+    const childData = data.data;
+    
+    // שמירת הנתונים במכשיר לשימוש עתידי
+    await saveChildCredentials(childData.id, token);
+
+    const childProfile: ChildProfile = {
+      id: childData.id,
+      name: childData.name,
+      familyId: childData.family_id,
+      avatarUrl: childData.avatar_url,
+      points: childData.points,
+      dailyStreak: childData.daily_streak,
+      isIndependent: childData.is_independent,
+      token: token // שומרים בזיכרון הנוכחי
+    };
+
+    return { success: true, child: childProfile, token };
+
+  } catch (err: any) {
+    console.error('Get child by token failed:', err);
+    return { success: false, error: err.message };
   }
 }
 
 // ==========================================
-// 4. כללי (Helpers)
+// 3. ניהול אחסון מקומי (Local Storage)
 // ==========================================
 
-export async function getCurrentUserProfile(): Promise<UserProfile | null> {
+async function saveChildCredentials(childId: string, token: string) {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    const jsonValue = JSON.stringify({ childId, token });
+    await AsyncStorage.setItem(CHILD_STORAGE_KEY, jsonValue);
+  } catch (e) {
+    console.error('Failed to save child creds', e);
+  }
+}
 
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
-
-    if (error || !profile) return null;
-
-    return profile as UserProfile;
-  } catch (error) {
+export async function getStoredChildCredentials() {
+  try {
+    const jsonValue = await AsyncStorage.getItem(CHILD_STORAGE_KEY);
+    return jsonValue != null ? JSON.parse(jsonValue) : null;
+  } catch (e) {
     return null;
   }
 }
