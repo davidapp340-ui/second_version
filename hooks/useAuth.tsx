@@ -20,6 +20,7 @@ type AuthContextType = {
 
   // מצב 2: ילד מקושר (ללא אימייל)
   linkedChild: ChildProfile | null;
+  isLinkedMode: boolean; // <-- התוספת החדשה: דגל ברור למצב מקושר
 
   // מצב כללי
   loading: boolean;
@@ -35,6 +36,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   profile: null,
   linkedChild: null,
+  isLinkedMode: false, // <-- ערך ברירת מחדל
   loading: true,
   signInWithCode: async () => ({ error: null }),
   signOutUser: async () => {},
@@ -55,6 +57,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [linkedChild, setLinkedChild] = useState<ChildProfile | null>(null);
 
   const [loading, setLoading] = useState(true);
+
+  // חישוב המצב המקושר - אם יש ילד בזיכרון, אנחנו במצב מקושר
+  const isLinkedMode = !!linkedChild;
 
   // 1. אתחול ראשוני: בדיקה מי מחובר
   useEffect(() => {
@@ -177,6 +182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         profile,
         linkedChild,
+        isLinkedMode, // <-- חשיפה החוצה לכל האפליקציה
         loading,
         signInWithCode,
         signOutUser,
