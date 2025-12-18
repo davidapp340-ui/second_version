@@ -14,18 +14,17 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/hooks/useAuth'; // שימוש בהוק החדש
 import { ArrowRight, KeyRound } from 'lucide-react-native';
 
 export default function ChildLoginScreen() {
   const router = useRouter();
-  const { signInWithCode } = useAuth();
+  const { signInWithCode, isLoading } = useAuth(); // שליפת הפונקציה מההוק
   
   const [code, setCode] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleLogin = async () => {
-    // ניקוי רווחים ושמירה על אותיות גדולות
     const cleanCode = code.trim().toUpperCase();
 
     if (cleanCode.length < 6) {
@@ -33,17 +32,23 @@ export default function ChildLoginScreen() {
       return;
     }
 
-    setLoading(true);
-    // קריאה לפונקציה ב-useAuth שמבצעת את הצימוד ושומרת בזיכרון
-    const { error } = await signInWithCode(cleanCode);
+    setIsSubmitting(true);
     
-    if (error) {
-      Alert.alert('התחברות נכשלה', 'הקוד שגוי או פג תוקף. בקש מאבא או אמא קוד חדש.');
-      setLoading(false);
-    } else {
-      // הצלחה!
-      // אין צורך לנווט ידנית - ה-_layout יזהה ש-useUserRole השתנה
-      // ויעביר אותנו אוטומטית למסך הבית.
+    try {
+      // קריאה לפונקציית הצימוד החדשה
+      const result = await signInWithCode(cleanCode);
+      
+      if (!result.success) {
+        Alert.alert('התחברות נכשלה', result.error || 'הקוד שגוי או פג תוקף');
+        setIsSubmitting(false);
+      } else {
+        // ההצלחה תזוהה אוטומטית ע"י useAuth שיעביר אותנו למסך הבית
+        // אבל ליתר ביטחון, אם הניווט האוטומטי לא קורה מייד:
+         router.replace('/(tabs)');
+      }
+    } catch (e) {
+      setIsSubmitting(false);
+      Alert.alert('שגיאה', 'ארעה שגיאה בתקשורת');
     }
   };
 
@@ -59,11 +64,10 @@ export default function ChildLoginScreen() {
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.content}
           >
-            {/* כפתור חזרה */}
             <TouchableOpacity 
               style={styles.backButton} 
               onPress={() => router.back()}
-              disabled={loading}
+              disabled={isSubmitting || isLoading}
             >
               <ArrowRight size={24} color="#1A1A1A" />
             </TouchableOpacity>
@@ -91,16 +95,16 @@ export default function ChildLoginScreen() {
                   maxLength={6}
                   returnKeyType="go"
                   onSubmitEditing={handleLogin}
-                  editable={!loading}
+                  editable={!isSubmitting}
                 />
               </View>
 
               <TouchableOpacity
-                style={[styles.button, (loading || code.length < 6) && styles.buttonDisabled]}
+                style={[styles.button, (isSubmitting || code.length < 6) && styles.buttonDisabled]}
                 onPress={handleLogin}
-                disabled={loading || code.length < 6}
+                disabled={isSubmitting || code.length < 6}
               >
-                {loading ? (
+                {isSubmitting ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
                   <Text style={styles.buttonText}>התחבר למשחק!</Text>
