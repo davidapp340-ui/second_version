@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getCurrentUser } from '@/lib/authService';
+import { useAuth } from '@/hooks/useAuth'; // שימוש ב-Auth הקיים
 import { getChildByUserId, type Child } from '@/lib/familyService';
 import { getChildPoints, type ChildPoints } from '@/lib/pointsService';
 import { getChildNotifications, markChildNotificationAsRead, type ChildNotification } from '@/lib/notificationService';
+import { supabase } from '@/lib/supabase'; // נצטרך את זה לשליפה ישירה אם חסרה פונקציה
 
 export function useChildHomeData() {
+  const { user, linkedChild, isLinkedMode } = useAuth(); // שימוש בנתונים מהקונטקסט
+  
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [childName, setChildName] = useState('');
@@ -14,48 +17,76 @@ export function useChildHomeData() {
   const [points, setPoints] = useState<ChildPoints | null>(null);
   const [notifications, setNotifications] = useState<ChildNotification[]>([]);
 
-  const generateDailyMessage = (child: Child) => {
+  const generateDailyMessage = (child: Child | any) => {
     const messages = [
       'כל הכבוד! השלמת את כל התרגילים אתמול!',
       'אל תשכח להתאמן היום!',
       'אתה עושה עבודה מצוינת!',
       'כבר תרגלת היום? בוא נמשיך!',
     ];
-
-    if (child.last_practice_date) {
-      const today = new Date().toDateString();
-      const lastPractice = new Date(child.last_practice_date).toDateString();
-      if (today === lastPractice) {
-        return 'כל הכבוד! השלמת את התרגיל היומי! 🎉';
-      }
-    }
-
+    // לוגיקה פשוטה להודעה
     return messages[Math.floor(Math.random() * messages.length)];
   };
 
   const loadData = async () => {
     try {
-      const user = await getCurrentUser();
-      if (!user) return;
+      let currentChildId: string | null = null;
+      let currentChildName: string = '';
 
-      const firstName = user.user_metadata?.first_name || 'ידידי';
-      setChildName(firstName);
+      // תרחיש א': ילד מקושר
+      if (isLinkedMode && linkedChild) {
+        currentChildId = linkedChild.id;
+        currentChildName = linkedChild.name;
+        setIsLinked(true);
+        
+        // המרה בסיסית של הפרופיל למבנה של Child אם חסרים נתונים
+        // או שליפה מלאה מהדאטהבייס אם צריך עדכון
+        setChildData(linkedChild as unknown as Child); 
+      } 
+      // תרחיש ב': ילד עצמאי (עם משתמש)
+      else if (user) {
+        const firstName = user.user_metadata?.first_name || 'ידידי';
+        currentChildName = firstName;
+        
+        // שליפה לפי User ID
+        const child = await getChildByUserId(user.id);
+        if (child) {
+            currentChildId = child.id;
+            setChildData(child);
+            setIsLinked(child.is_linked || false);
+        }
+      }
 
-      const child = await getChildByUserId(user.id);
-      if (child) {
-        setChildData(child);
-        setIsLinked(child.is_linked);
-        setDailyMessage(generateDailyMessage(child));
+      setChildName(currentChildName);
 
-        // טעינת נקודות והתראות במקביל (מהיר יותר)
+      // אם זיהינו ילד, נטען את שאר הנתונים (נקודות והתראות)
+      if (currentChildId) {
+        // שליפה טרייה של נתונים מהשרת (כדי לוודא סנכרון)
+        // הערה: אם getChildByUserId לא מתאים לילד מקושר, נשתמש בשליפה ישירה:
+        if (isLinkedMode) {
+            const { data: freshChild } = await supabase
+                .from('children')
+                .select('*')
+                .eq('id', currentChildId)
+                .single();
+            
+            if (freshChild) {
+                setChildData(freshChild as any);
+                setDailyMessage(generateDailyMessage(freshChild));
+            }
+        } else if (childData) {
+            setDailyMessage(generateDailyMessage(childData));
+        }
+
         const [childPoints, childNotifications] = await Promise.all([
-          getChildPoints(child.id).catch(() => null),
-          getChildNotifications(child.id).catch(() => [])
+          getChildPoints(currentChildId).catch(() => null),
+          getChildNotifications(currentChildId).catch(() => [])
         ]);
 
         if (childPoints) setPoints(childPoints);
         if (childNotifications) setNotifications(childNotifications.slice(0, 5));
       }
+
     } catch (error) {
       console.error('Error loading child home data:', error);
     } finally {
@@ -65,7 +96,7 @@ export function useChildHomeData() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [user, linkedChild]); // תלות בשינוי משתמש
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
