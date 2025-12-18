@@ -13,16 +13,17 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowRight, User, Calendar, Copy, Check } from 'lucide-react-native';
+import { ArrowRight, User, Calendar, Check } from 'lucide-react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { createLinkedChild, generateLinkingCode } from '@/lib/authService';
 
 export default function AddChildScreen() {
   const router = useRouter();
-  const { profile } = useAuth();
+  // תיקון: שליפת 'user' במקום 'profile' כדי להתאים ל-useAuth החדש
+  const { user } = useAuth();
   
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState<'form' | 'success'>('form'); // ניהול שלבים במסך
+  const [step, setStep] = useState<'form' | 'success'>('form');
   const [generatedCode, setGeneratedCode] = useState('');
   
   // טופס
@@ -35,7 +36,8 @@ export default function AddChildScreen() {
       return;
     }
 
-    if (!profile?.familyId) {
+    // וידוא שהמשתמש מחובר ויש לו משפחה
+    if (!user || !user.familyId) {
       Alert.alert('שגיאה', 'לא נמצא שיוך משפחתי. נסה להתחבר מחדש.');
       return;
     }
@@ -45,8 +47,8 @@ export default function AddChildScreen() {
       // 1. יצירת הילד בטבלה
       const { child, error: createError } = await createLinkedChild(
         name, 
-        parseInt(age), 
-        profile.familyId
+        parseInt(age) || 8, 
+        user.familyId
       );
 
       if (createError || !child) {
