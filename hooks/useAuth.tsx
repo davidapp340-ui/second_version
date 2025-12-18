@@ -8,13 +8,25 @@ import {
   signOut as authSignOut,
   pairDeviceWithCode,
   signIn as authSignIn,
-  signUpParent as authSignUpParent
+  signUpParent as authSignUpParent,
+  signUpIndependentChild as authSignUpIndependentChild
 } from '@/lib/authService';
 import { supabase } from '@/lib/supabase';
 
+// הגדרת הממשק של ה-Context – אלו הפונקציות שיהיו זמינות בכל האפליקציה
 interface AuthContextType extends AuthState {
   signIn: (e: string, p: string) => Promise<{ error: any }>;
   signUpParent: (e: string, p: string, n: string) => Promise<{ error: any }>;
+  
+  // פונקציה חדשה שהייתה חסרה
+  signUpIndependentChild: (params: { 
+    email: string; 
+    password: string; 
+    name: string; 
+    age: string; 
+    avatarUrl?: string; 
+  }) => Promise<{ error: any }>;
+
   signInWithCode: (code: string) => Promise<{ success: boolean; error?: string }>;
   signOut: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -34,16 +46,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const segments = useSegments();
 
-  // פונקציית הבדיקה הראשית - מי אני?
+  // --- הפונקציה הראשית: מי אני? ---
   const checkUser = async () => {
     try {
-      // 1. בדיקת משתמש רשום (הורה / ילד עצמאי)
+      // בדיקה 1: האם יש Session פעיל ב-Supabase? (הורה או ילד עצמאי)
       const userProfile = await getCurrentUserProfile();
       
       if (userProfile) {
         setState({
           user: userProfile,
-          child: null,
+          child: null, // הורה לא מוגדר כילד
           role: userProfile.role,
           isLoading: false,
           isAuthenticated: true
@@ -51,16 +63,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // 2. בדיקת ילד מקושר (Token בזיכרון)
+      // בדיקה 2: אם אין Session, האם יש טוקן של ילד מקושר בזיכרון המכשיר?
       const storedCreds = await getStoredChildCredentials();
       if (storedCreds && storedCreds.childId && storedCreds.token) {
+        // אימות הטוקן מול השרת
         const response = await getChildByToken(storedCreds.childId, storedCreds.token);
         
         if (response.success && response.child) {
           setState({
             user: null,
             child: response.child,
-            role: response.child.isIndependent ? 'child_independent' : 'child_linked', // לרוב זה יהיה linked
+            role: 'child_linked',
             isLoading: false,
             isAuthenticated: true
           });
@@ -68,7 +81,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // 3. אף אחד לא מחובר - אורח
+      // ברירת מחדל: אף אחד לא מחובר (אורח)
       setState({
         user: null,
         child: null,
@@ -79,32 +92,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     } catch (error) {
       console.error('Auth check failed:', error);
-      setState(prev => ({ ...prev, isLoading: false }));
+      // במקרה של שגיאה קריטית, נחזיר מצב אורח כדי לא לתקוע את האפליקציה
+      setState(prev => ({ ...prev, role: 'GUEST', isLoading: false, isAuthenticated: false }));
     }
   };
 
-  // הרצה ראשונית והאזנה לשינויים ב-Supabase
+  // --- האזנה לשינויים ---
   useEffect(() => {
     checkUser();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
-      checkUser();
+    // מאזין לשינויים ב-Supabase (כניסה/יציאה של הורים/עצמאיים)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      // אם האירוע הוא יציאה, או כניסה חדשה, נריץ בדיקה מחדש
+      checkUser(); 
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // --- פעולות ---
+  // --- פעולות (Actions) ---
 
   const signIn = async (email: string, pass: string) => {
+    setState(prev => ({ ...prev, isLoading: true }));
     const { error } = await authSignIn(email, pass);
-    if (!error) await checkUser();
+    if (error) setState(prev => ({ ...prev, isLoading: false }));
+    // הערה: אין צורך לקרוא ל-checkUser כאן ידנית, ה-listener למעלה יעשה זאת
     return { error };
   };
 
   const signUpParent = async (email: string, pass: string, name: string) => {
+    setState(prev => ({ ...prev, isLoading: true }));
     const { error } = await authSignUpParent(email, pass, name);
-    if (!error) await checkUser();
+    if (error) setState(prev => ({ ...prev, isLoading: false }));
+    return { error };
+  };
+
+  const signUpIndependentChild = async (params: any) => {
+    setState(prev => ({ ...prev, isLoading: true }));
+    const { error } = await authSignUpIndependentChild(params);
+    if (error) setState(prev => ({ ...prev, isLoading: false }));
     return { error };
   };
 
@@ -113,7 +139,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await pairDeviceWithCode(code);
     
     if (result.success) {
-      await checkUser(); // רענון המצב כדי לזהות את הילד החדש
+      // כאן ה-Listener של Supabase לא יעבוד (כי זה לא auth רגיל),
+      // אז חובה לקרוא ל-checkUser ידנית
+      await checkUser(); 
     } else {
       setState(prev => ({ ...prev, isLoading: false }));
     }
@@ -121,16 +149,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    await authSignOut();
-    await checkUser();
-    router.replace('/'); // חזרה למסך הפתיחה
+    setState(prev => ({ ...prev, isLoading: true }));
+    try {
+      await authSignOut();
+      // איפוס ידני למצב אורח
+      setState({
+        user: null,
+        child: null,
+        role: 'GUEST',
+        isLoading: false,
+        isAuthenticated: false
+      });
+      // זריקה למסך הפתיחה
+      router.replace('/'); 
+    } catch (e) {
+      console.error("Sign out error", e);
+      setState(prev => ({ ...prev, isLoading: false }));
+    }
   };
 
   return (
     <AuthContext.Provider value={{ 
       ...state, 
       signIn, 
-      signUpParent, 
+      signUpParent,
+      signUpIndependentChild,
       signInWithCode, 
       signOut,
       refreshUser: checkUser
